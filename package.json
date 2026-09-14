@@ -1,0 +1,37 @@
+{
+  "name": "webfetch",
+  "version": "0.1.0",
+  "description": "A self-hosted web-fetch service: tiered HTTP→browser fetching with stealth (Camoufox), a Reddit chain, and per-domain method learning, behind a REST /fetch face and an MCP browse surface.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "lint": "oxlint",
+    "server": "tsx src/server.ts",
+    "standalone": "tsx src/standalone.ts",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "better-sqlite3": "^13.0.3",
+    "camoufox-js": "^0.12.0",
+    "playwright-core": "1.60.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/node": "^26.5.1",
+    "oxlint": "1.82.0",
+    "prettier": "^3.9.6",
+    "tsx": "^4.23.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.0"
+  }
+}

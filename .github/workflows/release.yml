@@ -1,0 +1,57 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+  # REQUIRED, not merely convenient: it is the only way to exercise a red gate
+  # without breaking main or pushing a tag, and it re-runs a stuck release.
+  workflow_dispatch:
+
+# Serialize runs so a post-merge run cannot race the run that spawned it.
+# cancel-in-progress MUST be false — cancelling mid-release can interrupt
+# tag creation.
+concurrency:
+  group: release-please-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # Same reusable gate publish-image.yml uses. Gating the release here too means
+  # a red main opens no release PR, so no tag is cut for code that fails its
+  # checks — the tag/Release-with-no-image failure this prevents is visible
+  # outside the repo.
+  test:
+    uses: ./.github/workflows/test.yml
+
+  release-please:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          # NOT the default GITHUB_TOKEN — a tag pushed with it does not trigger
+          # publish-image.yml, silently. Fine-grained PAT: contents r/w,
+          # pull-requests r/w.
+          token: ${{ secrets.RELEASE_BOT_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # No `if:` and no `id:` on the bot step above — this step queries for the
+      # open release PR rather than consuming outputs, which makes it idempotent:
+      # it merges one if present, exits 0 if not, and self-heals after any
+      # transient failure. Gating on `prs_created` would skip it forever after a
+      # single miss.
+      - name: Auto-merge the release PR
+        env:
+          # Must be RELEASE_BOT_TOKEN: a merge performed with GITHUB_TOKEN does
+          # not trigger the follow-up run that cuts the tag.
+          GH_TOKEN: ${{ secrets.RELEASE_BOT_TOKEN }}
+        run: |
+          # --repo is REQUIRED: a release-please job has no checkout (the action
+          # works through the API), so gh cannot infer the repo from a git remote.
+          pr=$(gh pr list --repo "${{ github.repository }}" --state open --json number,title \
+                --jq 'map(select(.title | test("^chore(\\(.+\\))?: release "))) | .[0].number // empty')
+          if [ -z "$pr" ]; then echo "no open release PR"; exit 0; fi
+          gh pr merge --squash --delete-branch --repo "${{ github.repository }}" "$pr"
