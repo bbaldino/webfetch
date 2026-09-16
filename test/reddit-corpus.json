@@ -1,0 +1,7 @@
+[
+  {
+    "url": "https://www.reddit.com/r/homeassistant/s/uMlZOjztiQ",
+    "note": "Share link; resolves to /comments/1whrolb/made_ha_my_running_coach_and_app/. Reported as a 404 via webfetch.home on 2026-09-16 — Reddit rate-limited the chain and the RSS path returned a 404 'page not found' feed that was being surfaced as success (see tryRssFeed status guard).",
+    "expectTitleContains": "Running Coach"
+  }
+]

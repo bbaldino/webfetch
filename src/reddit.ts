@@ -247,6 +247,57 @@ function extractHtmlTitle(html: string): string | undefined {
   return m[1].replace(/\s*[:|—-]\s*reddit$/i, '').trim() || undefined
 }
 
+/** Below this, a scraped Reddit page is treated as nav-chrome-only (no content). */
+const MIN_CONTENT_CHARS = 200
+
+/**
+ * Depth-aware extraction of the element bearing id="main-content" — shreddit's
+ * (new-reddit SSR) landmark wrapping the post and comment tree. Returns that
+ * element's HTML, so the site header, footer, and "more posts" rail are left
+ * behind. Returns null when the page has no such landmark (e.g. old.reddit's
+ * classic markup), so the caller can fall back to the whole body.
+ */
+function extractMainContent(html: string): string | null {
+  const open = html.match(/<(\w+)[^>]*\bid=["']main-content["']/i)
+  if (!open || open.index === undefined) return null
+  const tag = open[1]
+  const re = new RegExp(`</?${tag}\\b`, 'gi')
+  re.lastIndex = open.index + open[0].length
+  let depth = 1
+  let m: RegExpExecArray | null
+  while ((m = re.exec(html)) !== null) {
+    if (m[0][1] === '/') {
+      depth--
+      if (depth === 0) return html.slice(open.index, re.lastIndex)
+    } else {
+      depth++
+    }
+  }
+  return html.slice(open.index)
+}
+
+/**
+ * Shreddit renders Tailwind arbitrary-variant class names (e.g.
+ * `[&>:first-child]:h-full`) that survive tag-stripping and leak into the text.
+ * Drop those tokens and the bare sizing utilities that trail them.
+ */
+function stripClassGarbage(text: string): string {
+  return text
+    .replace(/\S*(?:\[&|\]:|:first-child\]|rounded-\[inherit\])\S*/g, ' ')
+    .replace(/\b(?:h-full|w-full|max-h-full|overflow-hidden)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+/**
+ * Turn a scraped Reddit HTML page into readable text: prefer the #main-content
+ * region (post + comments only), fall back to the whole document, then strip
+ * shreddit's class-name garbage. Used by the old.reddit / FeedFetcher methods.
+ */
+export function extractRedditPageText(html: string): string {
+  return stripClassGarbage(htmlToText(extractMainContent(html) ?? html))
+}
+
 async function tryOldReddit(canonicalUrl: string): Promise<RedditResult> {
   let oldUrl: string
   try {
@@ -282,7 +333,8 @@ async function tryOldReddit(canonicalUrl: string): Promise<RedditResult> {
     if (!response.ok) return fail(`HTTP ${response.status}`)
     const html = await response.text()
     if (looksBlocked(response.status, html)) return fail('blocked or empty response')
-    const text = htmlToText(html).slice(0, MAX_OUTPUT_BYTES)
+    const text = extractRedditPageText(html).slice(0, MAX_OUTPUT_BYTES)
+    if (text.length < MIN_CONTENT_CHARS) return fail('nav chrome only, no content')
     return {
       ok: true,
       content: text,
@@ -297,7 +349,7 @@ async function tryOldReddit(canonicalUrl: string): Promise<RedditResult> {
   }
 }
 
-async function tryFeedFetcher(canonicalUrl: string): Promise<RedditResult> {
+export async function tryFeedFetcher(canonicalUrl: string): Promise<RedditResult> {
   const fail = (error: string): RedditResult => ({
     ok: false,
     content: '',
@@ -316,7 +368,8 @@ async function tryFeedFetcher(canonicalUrl: string): Promise<RedditResult> {
     if (!response.ok) return fail(`HTTP ${response.status}`)
     const html = await response.text()
     if (looksBlocked(response.status, html)) return fail('blocked or empty response')
-    const text = htmlToText(html).slice(0, MAX_OUTPUT_BYTES)
+    const text = extractRedditPageText(html).slice(0, MAX_OUTPUT_BYTES)
+    if (text.length < MIN_CONTENT_CHARS) return fail('nav chrome only, no content')
     return {
       ok: true,
       content: text,
@@ -414,7 +467,7 @@ export function parseRedditRss(xml: string): { title?: string; content: string }
   return { title: postTitle || undefined, content: out }
 }
 
-async function tryRssFeed(canonicalUrl: string): Promise<RedditResult> {
+export async function tryRssFeed(canonicalUrl: string): Promise<RedditResult> {
   const rssUrl = canonicalUrl.replace(/\/$/, '') + '.rss'
   const fail = (error: string, bytes = 0): RedditResult => ({
     ok: false,
@@ -435,6 +488,11 @@ async function tryRssFeed(canonicalUrl: string): Promise<RedditResult> {
       signal: AbortSignal.timeout(20000),
     })
     const text = await response.text()
+    // Reddit returns a structurally-valid Atom feed titled "<sub>: page not
+    // found" with an HTTP 404 for a post it can't resolve. Guard on status like
+    // the other methods do, so that placeholder feed isn't parsed and returned
+    // as if it were real content (looksBlocked only catches 403/429, not 404).
+    if (!response.ok) return fail(`HTTP ${response.status}`, text.length)
     if (looksBlocked(response.status, text))
       return fail(`blocked (HTTP ${response.status})`, text.length)
     if (!/<feed|<rss/i.test(text.slice(0, 300))) return fail('Non-feed response', text.length)
