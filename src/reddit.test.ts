@@ -130,6 +130,8 @@ describe('extractRedditPageText', () => {
     // Tailwind class-token garbage must be scrubbed
     expect(text).not.toContain('[&>')
     expect(text).not.toContain('h-full')
+    // the region's own closing tag must not leak in as text
+    expect(text).not.toContain('</')
   })
 
   it('yields near-nothing for a chrome-only shell with an empty #main-content', () => {

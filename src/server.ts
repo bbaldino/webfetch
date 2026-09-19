@@ -84,7 +84,13 @@ const server = http.createServer(async (req, res) => {
       })
       return
     }
-    json(res, 404, { error: 'not found' })
+    // A bare/wrong route is almost always a client misconfig (e.g. a base URL
+    // set to the host with no `/fetch` path, so requests land on `/`). Say what
+    // the valid routes are instead of a blank "not found".
+    json(res, 404, {
+      error: 'not found',
+      hint: 'POST /fetch with JSON {"url":"..."}, or GET /health',
+    })
   } catch (err) {
     json(res, 500, { error: (err as Error).message })
   }
