@@ -227,18 +227,23 @@ function extractRedditTitle(data: unknown): string | undefined {
 }
 
 function htmlToText(html: string): string {
-  return html
-    .replace(/<script[\s\S]*?<\/script>/gi, '')
-    .replace(/<style[\s\S]*?<\/style>/gi, '')
-    .replace(/<[^>]+>/g, ' ')
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/\s+/g, ' ')
-    .trim()
+  return (
+    html
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/<style[\s\S]*?<\/style>/gi, '')
+      // Quote-aware tag strip: a `>` inside an attribute value (e.g. shreddit's
+      // Tailwind `class="[&>:first-child]:h-full"`) must not end the tag early,
+      // or the tag's `">` tail leaks into the text.
+      .replace(/<[^>"']*(?:"[^"]*"[^>"']*|'[^']*'[^>"']*)*>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;/g, "'")
+      .replace(/\s+/g, ' ')
+      .trim()
+  )
 }
 
 function extractHtmlTitle(html: string): string | undefined {
@@ -261,7 +266,9 @@ function extractMainContent(html: string): string | null {
   const open = html.match(/<(\w+)[^>]*\bid=["']main-content["']/i)
   if (!open || open.index === undefined) return null
   const tag = open[1]
-  const re = new RegExp(`</?${tag}\\b`, 'gi')
+  // Match the whole tag through its closing `>` so the returned region ends
+  // after `</tag>` rather than mid-tag (which would leak `</tag` as text).
+  const re = new RegExp(`</?${tag}\\b[^>]*>`, 'gi')
   re.lastIndex = open.index + open[0].length
   let depth = 1
   let m: RegExpExecArray | null
