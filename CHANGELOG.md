@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.3](https://github.com/bbaldino/webfetch/compare/v0.2.2...v0.2.3) (2026-09-19)
+
+
+### Bug Fixes
+
+* clean stray tag fragments from scraped Reddit text; add a 404 route hint ([#5](https://github.com/bbaldino/webfetch/issues/5)) ([865eccd](https://github.com/bbaldino/webfetch/commit/865eccdc179932844f289ce96d868b1f8408b06e))
+
 ## [0.2.2](https://github.com/bbaldino/webfetch/compare/v0.2.1...v0.2.2) (2026-09-16)
 
 
