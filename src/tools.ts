@@ -2,9 +2,9 @@ import { z } from 'zod'
 import { defineTool, type ToolDeclaration } from './core-compat.js'
 import type { BrowserManager } from './browser-manager.js'
 import type { DomainDb } from './domain-db.js'
-import { takeSnapshot } from './snapshot.js'
 import { isRedditUrl, fetchReddit } from './reddit.js'
 import { rewriteUrl } from './url-rewrite.js'
+import * as browse from './browse.js'
 
 /**
  * Extract a run ID from the tool context.
@@ -57,100 +57,6 @@ function isContentUsable(text: string): boolean {
     if (lower.includes(pattern) && text.length < 2000) return true // Only flag if page is mostly just this
   }
   return true
-}
-
-/**
- * Valid ARIA roles for getByRole().
- */
-const VALID_ROLES = [
-  'alert',
-  'alertdialog',
-  'application',
-  'article',
-  'banner',
-  'blockquote',
-  'button',
-  'caption',
-  'cell',
-  'checkbox',
-  'code',
-  'columnheader',
-  'combobox',
-  'complementary',
-  'contentinfo',
-  'definition',
-  'deletion',
-  'dialog',
-  'directory',
-  'document',
-  'emphasis',
-  'feed',
-  'figure',
-  'form',
-  'generic',
-  'grid',
-  'gridcell',
-  'group',
-  'heading',
-  'img',
-  'insertion',
-  'link',
-  'list',
-  'listbox',
-  'listitem',
-  'log',
-  'main',
-  'marquee',
-  'math',
-  'menu',
-  'menubar',
-  'menuitem',
-  'menuitemcheckbox',
-  'menuitemradio',
-  'meter',
-  'navigation',
-  'none',
-  'note',
-  'option',
-  'paragraph',
-  'presentation',
-  'progressbar',
-  'radio',
-  'radiogroup',
-  'region',
-  'row',
-  'rowgroup',
-  'rowheader',
-  'scrollbar',
-  'search',
-  'searchbox',
-  'separator',
-  'slider',
-  'spinbutton',
-  'status',
-  'strong',
-  'subscript',
-  'superscript',
-  'switch',
-  'tab',
-  'table',
-  'tablist',
-  'tabpanel',
-  'term',
-  'textbox',
-  'time',
-  'timer',
-  'toolbar',
-  'tooltip',
-  'tree',
-  'treegrid',
-  'treeitem',
-] as const
-
-type AriaRole = (typeof VALID_ROLES)[number]
-
-function isValidRole(role: string): role is AriaRole {
-  return VALID_ROLES.includes(role as AriaRole)
 }
 
 /** Extract the page <title>, if any. */
@@ -350,20 +256,13 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
       }),
       async handler(params, ctx) {
         const session = await browserManager.getSession(getRunId(ctx))
-        const url = rewriteUrl(params.url)
-        await session.page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
-        await session.page.waitForTimeout(1000)
         try {
-          session.domain = new URL(url).hostname
+          session.domain = new URL(rewriteUrl(params.url)).hostname
         } catch {
           /* skip */
         }
-        const snapshot = await takeSnapshot(session.page)
-        return {
-          url: session.page.url(),
-          title: await session.page.title(),
-          snapshot,
-        }
+        const r = await browse.navigate(session.page, params.url)
+        return { url: r.url, title: r.title, snapshot: r.snapshot }
       },
     }),
 
@@ -375,12 +274,8 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
       params: z.object({}),
       async handler(_params, ctx) {
         const session = await browserManager.getSession(getRunId(ctx))
-        const snapshot = await takeSnapshot(session.page)
-        return {
-          url: session.page.url(),
-          title: await session.page.title(),
-          snapshot,
-        }
+        const r = await browse.snapshot(session.page)
+        return { url: r.url, title: r.title, snapshot: r.snapshot }
       },
     }),
 
@@ -394,19 +289,14 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         name: z.string().describe('Accessible name of the element'),
       }),
       async handler(params, ctx) {
-        if (!isValidRole(params.role)) {
-          return {
-            error: `Invalid role "${params.role}". Use a role from the accessibility snapshot.`,
-          }
-        }
         const session = await browserManager.getSession(getRunId(ctx))
-        await session.page
-          .getByRole(params.role, { name: params.name })
-          .first()
-          .click({ timeout: 5000 })
-        await session.page.waitForTimeout(500)
-        const snapshot = await takeSnapshot(session.page)
-        return { snapshot }
+        try {
+          const r = await browse.click(session.page, params.role, params.name)
+          return { snapshot: r.snapshot }
+        } catch (err) {
+          if (err instanceof browse.InvalidRoleError) return { error: err.message }
+          throw err
+        }
       },
     }),
 
@@ -424,19 +314,20 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         submit: z.boolean().optional().describe('Press Enter after typing (default: false)'),
       }),
       async handler(params, ctx) {
-        if (!isValidRole(params.role)) {
-          return { error: `Invalid role "${params.role}".` }
-        }
         const session = await browserManager.getSession(getRunId(ctx))
-        const el = session.page.getByRole(params.role, { name: params.name }).first()
-        await el.click({ timeout: 5000 })
-        await el.fill(params.text)
-        if (params.submit) {
-          await session.page.keyboard.press('Enter')
-          await session.page.waitForTimeout(1000)
+        try {
+          const r = await browse.type(
+            session.page,
+            params.role,
+            params.name,
+            params.text,
+            params.submit,
+          )
+          return { snapshot: r.snapshot }
+        } catch (err) {
+          if (err instanceof browse.InvalidRoleError) return { error: err.message }
+          throw err
         }
-        const snapshot = await takeSnapshot(session.page)
-        return { snapshot }
       },
     }),
 
@@ -448,10 +339,8 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
       }),
       async handler(params, ctx) {
         const session = await browserManager.getSession(getRunId(ctx))
-        await session.page.keyboard.press(params.key)
-        await session.page.waitForTimeout(300)
-        const snapshot = await takeSnapshot(session.page)
-        return { snapshot }
+        const r = await browse.pressKey(session.page, params.key)
+        return { snapshot: r.snapshot }
       },
     }),
 
@@ -464,14 +353,14 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         values: z.array(z.string()).describe('Values to select'),
       }),
       async handler(params, ctx) {
-        if (!isValidRole(params.role)) {
-          return { error: `Invalid role "${params.role}".` }
-        }
         const session = await browserManager.getSession(getRunId(ctx))
-        const el = session.page.getByRole(params.role, { name: params.name }).first()
-        await el.selectOption(params.values)
-        const snapshot = await takeSnapshot(session.page)
-        return { snapshot }
+        try {
+          const r = await browse.selectOption(session.page, params.role, params.name, params.values)
+          return { snapshot: r.snapshot }
+        } catch (err) {
+          if (err instanceof browse.InvalidRoleError) return { error: err.message }
+          throw err
+        }
       },
     }),
 
@@ -481,14 +370,8 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
       params: z.object({}),
       async handler(_params, ctx) {
         const session = await browserManager.getSession(getRunId(ctx))
-        await session.page.goBack({ waitUntil: 'domcontentloaded', timeout: 10000 })
-        await session.page.waitForTimeout(500)
-        const snapshot = await takeSnapshot(session.page)
-        return {
-          url: session.page.url(),
-          title: await session.page.title(),
-          snapshot,
-        }
+        const r = await browse.goBack(session.page)
+        return { url: r.url, title: r.title, snapshot: r.snapshot }
       },
     }),
 
@@ -501,12 +384,8 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
       }),
       async handler(params, ctx) {
         const session = await browserManager.getSession(getRunId(ctx))
-        const pixels = params.amount ?? 500
-        const delta = params.direction === 'down' ? pixels : -pixels
-        await session.page.mouse.wheel(0, delta)
-        await session.page.waitForTimeout(300)
-        const snapshot = await takeSnapshot(session.page)
-        return { snapshot }
+        const r = await browse.scroll(session.page, params.direction, params.amount)
+        return { snapshot: r.snapshot }
       },
     }),
   ]
