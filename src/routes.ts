@@ -2,7 +2,8 @@
 // can be unit tested without constructing a browser. `server.ts` is the only place that builds
 // the real deps (BrowserManager, DomainDb, SessionManager) and wires them in.
 import type http from 'node:http'
-import type { SessionManager } from './session-manager.js'
+import * as browse from './browse.js'
+import { SessionCapReached, SessionNotFound, type SessionManager } from './session-manager.js'
 
 export type FetchPageHandler = (
   args: { url: string },
@@ -67,6 +68,45 @@ export function createRouter(deps: RouterDeps) {
         return
       }
 
+      // --- sessions ---
+      if (pathname === '/sessions' && req.method === 'POST') {
+        try {
+          const { id, expiresInMs } = await deps.sessions.create()
+          json(res, 201, { session_id: id, expires_in_ms: expiresInMs })
+        } catch (err) {
+          mapError(res, err)
+        }
+        return
+      }
+
+      const m = pathname.match(/^\/sessions\/([^/]+)(?:\/([^/]+))?$/)
+      if (m) {
+        const id = decodeURIComponent(m[1])
+        const op = m[2]
+        if (req.method === 'DELETE' && !op) {
+          await deps.sessions.close(id)
+          res.writeHead(204).end()
+          return
+        }
+        if (req.method === 'POST' && op) {
+          const raw = await readBody(req)
+          let body: Record<string, unknown>
+          try {
+            body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {}
+          } catch {
+            json(res, 400, { error: 'invalid JSON body' })
+            return
+          }
+          try {
+            const result = await runOp(deps.sessions, id, op, body)
+            json(res, 200, result)
+          } catch (err) {
+            mapError(res, err)
+          }
+          return
+        }
+      }
+
       // A bare/wrong route is almost always a client misconfig (e.g. a base URL
       // set to the host with no `/fetch` path, so requests land on `/`). Say what
       // the valid routes are instead of a blank "not found".
@@ -77,5 +117,83 @@ export function createRouter(deps: RouterDeps) {
     } catch (err) {
       json(res, 500, { error: (err as Error).message })
     }
+  }
+}
+
+function need(body: Record<string, unknown>, key: string): string {
+  const v = body[key]
+  if (typeof v !== 'string' || v.length === 0) throw new BadRequest(`"${key}" string is required`)
+  return v
+}
+
+class BadRequest extends Error {}
+
+async function runOp(
+  sessions: SessionManager,
+  id: string,
+  op: string,
+  body: Record<string, unknown>,
+): Promise<browse.BrowseResult> {
+  switch (op) {
+    case 'navigate':
+      return sessions.run(id, (p) =>
+        browse.navigate(p, need(body, 'url'), {
+          waitFor: body.wait_for as browse.WaitFor | undefined,
+          timeoutMs: body.timeout_ms as number | undefined,
+        }),
+      )
+    case 'snapshot':
+      return sessions.run(id, (p) => browse.snapshot(p))
+    case 'click':
+      return sessions.run(id, (p) => browse.click(p, need(body, 'role'), need(body, 'name')))
+    case 'type':
+      return sessions.run(id, (p) =>
+        browse.type(
+          p,
+          need(body, 'role'),
+          need(body, 'name'),
+          need(body, 'text'),
+          body.submit === true,
+        ),
+      )
+    case 'scroll':
+      return sessions.run(id, (p) =>
+        browse.scroll(
+          p,
+          body.direction === 'up' ? 'up' : 'down',
+          body.amount as number | undefined,
+        ),
+      )
+    case 'back':
+      return sessions.run(id, (p) => browse.goBack(p))
+    case 'select':
+      return sessions.run(id, (p) =>
+        browse.selectOption(
+          p,
+          need(body, 'role'),
+          need(body, 'name'),
+          (body.values as string[]) ?? [],
+        ),
+      )
+    case 'press':
+      return sessions.run(id, (p) => browse.pressKey(p, need(body, 'key')))
+    case 'wait':
+      return sessions.run(id, (p) =>
+        browse.waitFor(p, body.wait_for as browse.WaitFor, body.timeout_ms as number | undefined),
+      )
+    default:
+      throw new BadRequest(`unknown operation "${op}"`)
+  }
+}
+
+function mapError(res: http.ServerResponse, err: unknown): void {
+  if (err instanceof SessionCapReached) {
+    json(res, 429, { error: err.message, hint: 'close a session or retry' })
+  } else if (err instanceof SessionNotFound) {
+    json(res, 404, { error: err.message, hint: 'create a new session' })
+  } else if (err instanceof browse.InvalidRoleError || err instanceof BadRequest) {
+    json(res, 400, { error: (err as Error).message })
+  } else {
+    json(res, 502, { error: (err as Error).message })
   }
 }
