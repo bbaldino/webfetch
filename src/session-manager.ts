@@ -45,12 +45,14 @@ export class SessionManager {
     const entry = this.entries.get(id)
     if (!entry) throw new SessionNotFound(id)
     const task = entry.queue.then(async () => {
-      if (!this.entries.has(id)) throw new SessionNotFound(id) // evicted while queued
-      const session = await this.bm.getSession(id)
+      const e = this.entries.get(id)
+      if (!e) throw new SessionNotFound(id) // evicted while queued
+      clearTimeout(e.timer) // pause idle timer for the duration of the op
       try {
+        const session = await this.bm.getSession(id)
         return await fn(session.page)
       } finally {
-        this.touch(id)
+        this.touch(id) // re-arm (no-op if the session was closed meanwhile)
       }
     })
     entry.queue = task.then(

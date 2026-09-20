@@ -58,4 +58,40 @@ describe('SessionManager', () => {
     await Promise.all([slow, fast])
     expect(order).toEqual(['start-a', 'end-a', 'b'])
   })
+
+  it('rejects queued operations if session is closed before they run', async () => {
+    const bm = stubBm()
+    const sm = new SessionManager(bm as never, { max: 1, ttlMs: 10000 })
+    const { id } = await sm.create()
+    let operationAStarted = false
+    let bRejection: Error | null = null
+    // Queue first operation
+    const opA = sm.run(id, async () => {
+      operationAStarted = true
+      // Hold this operation for a while
+      await new Promise((r) => setTimeout(r, 100))
+    })
+    // Queue second operation immediately (it will be queued)
+    // Immediately add error handler to prevent unhandled rejection warnings
+    const opB = sm
+      .run(id, async () => {
+        // This should never execute
+        throw new Error('operation B should not run')
+      })
+      .catch((err) => {
+        bRejection = err
+      })
+    // Let operation A start
+    await vi.advanceTimersByTimeAsync(50)
+    expect(operationAStarted).toBe(true)
+    // Close session while B is still queued
+    await sm.close(id)
+    // Run all remaining timers and microtasks
+    await vi.runAllTimersAsync()
+    // A should complete successfully
+    await opA
+    // B should have been rejected with SessionNotFound
+    await opB
+    expect(bRejection).toBeInstanceOf(SessionNotFound)
+  })
 })
