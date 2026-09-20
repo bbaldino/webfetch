@@ -4,6 +4,7 @@
 import type http from 'node:http'
 import * as browse from './browse.js'
 import { SessionCapReached, SessionNotFound, type SessionManager } from './session-manager.js'
+import { openapiSpec } from './openapi.js'
 
 export type FetchPageHandler = (
   args: { url: string },
@@ -36,6 +37,12 @@ export function createRouter(deps: RouterDeps) {
 
       if (req.method === 'GET' && pathname === '/health') {
         json(res, 200, { status: 'ok' })
+        return
+      }
+
+      // The service describes itself — clients/agents can fetch the contract.
+      if (req.method === 'GET' && pathname === '/openapi.json') {
+        json(res, 200, openapiSpec)
         return
       }
 

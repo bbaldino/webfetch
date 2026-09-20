@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import http from 'node:http'
 import { createRouter, type RouterDeps } from './routes.js'
 import { SessionCapReached, SessionNotFound } from './session-manager.js'
+import { SESSION_OPS } from './openapi.js'
 
 let server: http.Server | undefined
 afterEach(() => server?.close())
@@ -189,5 +190,45 @@ describe('session routes', () => {
       body: JSON.stringify({ url: 'https://x.test', timeout_ms: 'soon' }),
     })
     expect(res.status).toBe(400)
+  })
+})
+
+describe('GET /openapi.json', () => {
+  it('serves an OpenAPI 3.1 document describing the routes', async () => {
+    const base = await start(stubDeps())
+    const res = await fetch(`${base}/openapi.json`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toContain('application/json')
+    const spec = (await res.json()) as { openapi: string; paths: Record<string, unknown> }
+    expect(spec.openapi).toBe('3.1.0')
+    for (const p of ['/health', '/fetch', '/sessions', '/sessions/{id}']) {
+      expect(spec.paths[p]).toBeTruthy()
+    }
+  })
+
+  it('documents a POST path for every session op (spec stays in sync with SESSION_OPS)', async () => {
+    const base = await start(stubDeps())
+    const spec = (await (await fetch(`${base}/openapi.json`)).json()) as {
+      paths: Record<string, { post?: unknown }>
+    }
+    for (const op of SESSION_OPS) {
+      expect(spec.paths[`/sessions/{id}/${op}`]?.post).toBeTruthy()
+    }
+  })
+
+  it('router dispatches every SESSION_OPS op (none is an "unknown operation")', async () => {
+    const base = await start({
+      fetchPage: async () => ({ url: '', method: '' }),
+      sessions: sessionStub() as never,
+    })
+    for (const op of SESSION_OPS) {
+      const res = await fetch(`${base}/sessions/sess-1/${op}`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: '{}',
+      })
+      const body = (await res.json().catch(() => ({}))) as { error?: string }
+      expect(body.error ?? '').not.toContain('unknown operation')
+    }
   })
 })
