@@ -134,4 +134,32 @@ describe('session routes', () => {
     })
     expect(res.status).toBe(400)
   })
+
+  it('missing values on select returns 400', async () => {
+    const sessions = sessionStub()
+    const base = await start({
+      fetchPage: async () => ({ url: '', method: '' }),
+      sessions,
+    } as never)
+    const res = await fetch(`${base}/sessions/sess-1/select`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ role: 'combobox', name: 'Choice' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('missing wait_for on wait returns 400, not 502', async () => {
+    const sessions = sessionStub()
+    const base = await start({
+      fetchPage: async () => ({ url: '', method: '' }),
+      sessions,
+    } as never)
+    const res = await fetch(`${base}/sessions/sess-1/wait`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{}',
+    })
+    expect(res.status).toBe(400)
+  })
 })

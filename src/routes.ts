@@ -126,6 +126,23 @@ function need(body: Record<string, unknown>, key: string): string {
   return v
 }
 
+function needValues(body: Record<string, unknown>): string[] {
+  const v = body.values
+  if (!Array.isArray(v) || v.length === 0) throw new BadRequest('"values" array is required')
+  return v as string[]
+}
+
+function needWaitFor(body: Record<string, unknown>): browse.WaitFor {
+  const wf = body.wait_for as { text?: unknown; role?: unknown; name?: unknown } | undefined
+  const okText = !!wf && typeof wf.text === 'string' && wf.text.length > 0
+  const okRole =
+    !!wf && typeof wf.role === 'string' && wf.role.length > 0 && typeof wf.name === 'string'
+  if (!wf || typeof wf !== 'object' || (!okText && !okRole)) {
+    throw new BadRequest('"wait_for" must be {text} or {role,name}')
+  }
+  return wf as unknown as browse.WaitFor
+}
+
 class BadRequest extends Error {}
 
 async function runOp(
@@ -166,21 +183,18 @@ async function runOp(
       )
     case 'back':
       return sessions.run(id, (p) => browse.goBack(p))
-    case 'select':
+    case 'select': {
+      const values = needValues(body)
       return sessions.run(id, (p) =>
-        browse.selectOption(
-          p,
-          need(body, 'role'),
-          need(body, 'name'),
-          (body.values as string[]) ?? [],
-        ),
+        browse.selectOption(p, need(body, 'role'), need(body, 'name'), values),
       )
+    }
     case 'press':
       return sessions.run(id, (p) => browse.pressKey(p, need(body, 'key')))
-    case 'wait':
-      return sessions.run(id, (p) =>
-        browse.waitFor(p, body.wait_for as browse.WaitFor, body.timeout_ms as number | undefined),
-      )
+    case 'wait': {
+      const wf = needWaitFor(body)
+      return sessions.run(id, (p) => browse.waitFor(p, wf, body.timeout_ms as number | undefined))
+    }
     default:
       throw new BadRequest(`unknown operation "${op}"`)
   }
