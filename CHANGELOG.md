@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.3.0](https://github.com/bbaldino/webfetch/compare/v0.2.3...v0.3.0) (2026-09-20)
+
+
+### Features
+
+* add BrowseController with the shared browse operations ([5059301](https://github.com/bbaldino/webfetch/commit/505930150753c30edf9b388d243ece470f8a25b0))
+* add HTTP session routes for interactive browsing ([f59f174](https://github.com/bbaldino/webfetch/commit/f59f174b719f3f0876d964e69b748d20ff775eae))
+* add SessionManager (cap, idle TTL, per-session serialization) ([aca3e28](https://github.com/bbaldino/webfetch/commit/aca3e28604abd49e8e8ea7f5b2add43b862b1ca6))
+* serve an OpenAPI 3.1 spec at GET /openapi.json ([e088bdb](https://github.com/bbaldino/webfetch/commit/e088bdba04e5433039be05a0892ef6209d9bf5f0))
+
+
+### Bug Fixes
+
+* address final-review findings for browse sessions ([075304e](https://github.com/bbaldino/webfetch/commit/075304e6b799d8ff84dffb97bb5aae98220553ed))
+* pause idle timer during session operations and test evicted-while-queued case ([161f0e2](https://github.com/bbaldino/webfetch/commit/161f0e2c2f651bbd01aeb8275758968f647b313d))
+* validate select values and wait_for shape in session routes ([0380ff4](https://github.com/bbaldino/webfetch/commit/0380ff4e57807bd8a691a8ce0f7081e75695c13b))
+
 ## [0.2.3](https://github.com/bbaldino/webfetch/compare/v0.2.2...v0.2.3) (2026-09-19)
 
 
