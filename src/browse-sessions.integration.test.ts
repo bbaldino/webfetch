@@ -31,17 +31,19 @@ afterAll(async () => {
 
 describe.skipIf(!RUN)('session API (live browser)', () => {
   it('creates a session, navigates, snapshots, clicks, and closes', async () => {
-    const created = await (await fetch(`${base}/sessions`, { method: 'POST' })).json()
+    const createRes = await fetch(`${base}/sessions`, { method: 'POST' })
+    expect(createRes.status).toBe(201)
+    const created = await createRes.json()
     const id = created.session_id
     expect(id).toBeTruthy()
 
-    const nav = await (
-      await fetch(`${base}/sessions/${id}/navigate`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ url: 'https://example.com' }),
-      })
-    ).json()
+    const navRes = await fetch(`${base}/sessions/${id}/navigate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: 'https://example.com' }),
+    })
+    expect(navRes.status).toBe(200)
+    const nav = await navRes.json()
     expect(nav.snapshot).toContain('Example Domain')
 
     const clicked = await fetch(`${base}/sessions/${id}/click`, {

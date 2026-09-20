@@ -256,11 +256,6 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
       }),
       async handler(params, ctx) {
         const session = await browserManager.getSession(getRunId(ctx))
-        try {
-          session.domain = new URL(rewriteUrl(params.url)).hostname
-        } catch {
-          /* skip */
-        }
         const r = await browse.navigate(session.page, params.url)
         return { url: r.url, title: r.title, snapshot: r.snapshot }
       },

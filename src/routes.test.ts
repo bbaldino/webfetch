@@ -162,4 +162,32 @@ describe('session routes', () => {
     })
     expect(res.status).toBe(400)
   })
+
+  it('invalid wait_for on navigate returns 400, not 502', async () => {
+    const sessions = sessionStub()
+    const base = await start({
+      fetchPage: async () => ({ url: '', method: '' }),
+      sessions,
+    } as never)
+    const res = await fetch(`${base}/sessions/sess-1/navigate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: 'https://x.test', wait_for: 'x' }),
+    })
+    expect(res.status).toBe(400)
+  })
+
+  it('non-numeric timeout_ms on navigate returns 400', async () => {
+    const sessions = sessionStub()
+    const base = await start({
+      fetchPage: async () => ({ url: '', method: '' }),
+      sessions,
+    } as never)
+    const res = await fetch(`${base}/sessions/sess-1/navigate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: 'https://x.test', timeout_ms: 'soon' }),
+    })
+    expect(res.status).toBe(400)
+  })
 })

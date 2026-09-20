@@ -132,15 +132,53 @@ function needValues(body: Record<string, unknown>): string[] {
   return v as string[]
 }
 
-function needWaitFor(body: Record<string, unknown>): browse.WaitFor {
-  const wf = body.wait_for as { text?: unknown; role?: unknown; name?: unknown } | undefined
-  const okText = !!wf && typeof wf.text === 'string' && wf.text.length > 0
-  const okRole =
-    !!wf && typeof wf.role === 'string' && wf.role.length > 0 && typeof wf.name === 'string'
-  if (!wf || typeof wf !== 'object' || (!okText && !okRole)) {
+// Shared shape validation for `wait_for`, used both where it's required (the
+// `wait` op) and where it's optional (the `navigate` op's inline wait). If a
+// `text` key is present it must be a non-empty string — this matches
+// browse.applyWait's `'text' in wait` check, which would otherwise take the
+// (broken) empty-text branch instead of falling through to role/name.
+function validateWaitFor(wf: unknown): browse.WaitFor {
+  if (!wf || typeof wf !== 'object') {
     throw new BadRequest('"wait_for" must be {text} or {role,name}')
   }
-  return wf as unknown as browse.WaitFor
+  const w = wf as { text?: unknown; role?: unknown; name?: unknown }
+  if ('text' in w) {
+    if (typeof w.text !== 'string' || w.text.length === 0) {
+      throw new BadRequest('"wait_for.text" must be a non-empty string')
+    }
+    return { text: w.text }
+  }
+  if (typeof w.role !== 'string' || w.role.length === 0 || typeof w.name !== 'string') {
+    throw new BadRequest('"wait_for" must be {text} or {role,name}')
+  }
+  return { role: w.role, name: w.name }
+}
+
+function needWaitFor(body: Record<string, unknown>): browse.WaitFor {
+  return validateWaitFor(body.wait_for)
+}
+
+function optionalWaitFor(body: Record<string, unknown>): browse.WaitFor | undefined {
+  if (body.wait_for === undefined) return undefined
+  return validateWaitFor(body.wait_for)
+}
+
+const MAX_TIMEOUT_MS = 60000
+
+function optionalNumber(body: Record<string, unknown>, key: string): number | undefined {
+  const v = body[key]
+  if (v === undefined) return undefined
+  if (typeof v !== 'number' || !Number.isFinite(v)) {
+    throw new BadRequest(`"${key}" must be a number`)
+  }
+  return v
+}
+
+// Same as optionalNumber, but clamps to a sane upper bound instead of
+// rejecting — an overlong timeout is a nuisance, not a malformed request.
+function optionalTimeoutMs(body: Record<string, unknown>): number | undefined {
+  const v = optionalNumber(body, 'timeout_ms')
+  return v === undefined ? undefined : Math.min(v, MAX_TIMEOUT_MS)
 }
 
 class BadRequest extends Error {}
@@ -152,13 +190,12 @@ async function runOp(
   body: Record<string, unknown>,
 ): Promise<browse.BrowseResult> {
   switch (op) {
-    case 'navigate':
-      return sessions.run(id, (p) =>
-        browse.navigate(p, need(body, 'url'), {
-          waitFor: body.wait_for as browse.WaitFor | undefined,
-          timeoutMs: body.timeout_ms as number | undefined,
-        }),
-      )
+    case 'navigate': {
+      const url = need(body, 'url')
+      const waitFor = optionalWaitFor(body)
+      const timeoutMs = optionalTimeoutMs(body)
+      return sessions.run(id, (p) => browse.navigate(p, url, { waitFor, timeoutMs }))
+    }
     case 'snapshot':
       return sessions.run(id, (p) => browse.snapshot(p))
     case 'click':
@@ -173,14 +210,12 @@ async function runOp(
           body.submit === true,
         ),
       )
-    case 'scroll':
+    case 'scroll': {
+      const amount = optionalNumber(body, 'amount')
       return sessions.run(id, (p) =>
-        browse.scroll(
-          p,
-          body.direction === 'up' ? 'up' : 'down',
-          body.amount as number | undefined,
-        ),
+        browse.scroll(p, body.direction === 'up' ? 'up' : 'down', amount),
       )
+    }
     case 'back':
       return sessions.run(id, (p) => browse.goBack(p))
     case 'select': {
@@ -193,7 +228,8 @@ async function runOp(
       return sessions.run(id, (p) => browse.pressKey(p, need(body, 'key')))
     case 'wait': {
       const wf = needWaitFor(body)
-      return sessions.run(id, (p) => browse.waitFor(p, wf, body.timeout_ms as number | undefined))
+      const timeoutMs = optionalTimeoutMs(body)
+      return sessions.run(id, (p) => browse.waitFor(p, wf, timeoutMs))
     }
     default:
       throw new BadRequest(`unknown operation "${op}"`)

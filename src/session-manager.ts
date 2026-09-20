@@ -36,8 +36,18 @@ export class SessionManager {
   async create(): Promise<{ id: string; expiresInMs: number }> {
     if (this.entries.size >= this.opts.max) throw new SessionCapReached(this.opts.max)
     const id = randomUUID()
-    await this.bm.getSession(id) // eagerly open the context/page
-    this.entries.set(id, { timer: this.arm(id), queue: Promise.resolve() })
+    // Reserve the slot synchronously (no await between the size check and the
+    // set) so two concurrent create() calls at the cap boundary can't both
+    // pass the check and both insert.
+    const entry: Entry = { timer: this.arm(id), queue: Promise.resolve() }
+    this.entries.set(id, entry)
+    try {
+      await this.bm.getSession(id) // eagerly open the context/page
+    } catch (err) {
+      clearTimeout(entry.timer)
+      this.entries.delete(id)
+      throw err
+    }
     return { id, expiresInMs: this.opts.ttlMs }
   }
 

@@ -25,6 +25,18 @@ describe('SessionManager', () => {
     await expect(sm.create()).rejects.toBeInstanceOf(SessionCapReached)
   })
 
+  it('does not let two concurrent create() calls both exceed the cap', async () => {
+    const bm = stubBm()
+    const sm = new SessionManager(bm as never, { max: 1, ttlMs: 1000 })
+    const results = await Promise.allSettled([sm.create(), sm.create()])
+    const fulfilled = results.filter((r) => r.status === 'fulfilled')
+    const rejected = results.filter((r) => r.status === 'rejected')
+    expect(fulfilled).toHaveLength(1)
+    expect(rejected).toHaveLength(1)
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(SessionCapReached)
+    expect(sm.size).toBe(1)
+  })
+
   it('run throws SessionNotFound for an unknown id', async () => {
     const bm = stubBm()
     const sm = new SessionManager(bm as never, { max: 2, ttlMs: 1000 })
