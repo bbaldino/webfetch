@@ -29,7 +29,7 @@ function mockPage(overrides: Record<string, unknown> = {}) {
 }
 
 describe('BrowseController', () => {
-  it('navigate rewrites the url, uses domcontentloaded, returns the envelope', async () => {
+  it('navigate uses domcontentloaded and returns the envelope', async () => {
     const { page } = mockPage()
     const r = await browse.navigate(page as never, 'https://example.com')
     expect(page.goto).toHaveBeenCalledWith(
@@ -41,6 +41,15 @@ describe('BrowseController', () => {
       title: 'Example',
       snapshot: '- document:\n  - heading "Hi"',
     })
+  })
+
+  it('navigate rewrites reddit.com urls to old.reddit.com', async () => {
+    const { page } = mockPage()
+    await browse.navigate(page as never, 'https://www.reddit.com/r/test')
+    expect(page.goto).toHaveBeenCalledWith(
+      'https://old.reddit.com/r/test',
+      expect.objectContaining({ waitUntil: 'domcontentloaded' }),
+    )
   })
 
   it('navigate applies a wait_for condition when given', async () => {
@@ -69,6 +78,43 @@ describe('BrowseController', () => {
     await browse.type(page as never, 'textbox', 'Search', 'hello', true)
     expect(locator.fill).toHaveBeenCalledWith('hello')
     expect(page.keyboard.press).toHaveBeenCalledWith('Enter')
+  })
+
+  it('scroll sends positive delta for down', async () => {
+    const { page } = mockPage()
+    await browse.scroll(page as never, 'down', 500)
+    expect(page.mouse.wheel).toHaveBeenCalledWith(0, 500)
+  })
+
+  it('scroll sends negative delta for up', async () => {
+    const { page } = mockPage()
+    await browse.scroll(page as never, 'up', 500)
+    expect(page.mouse.wheel).toHaveBeenCalledWith(0, -500)
+  })
+
+  it('goBack navigates back and returns the envelope', async () => {
+    const { page } = mockPage()
+    const r = await browse.goBack(page as never)
+    expect(page.goBack).toHaveBeenCalledWith(
+      expect.objectContaining({ waitUntil: 'domcontentloaded' }),
+    )
+    expect(r).toEqual({
+      url: 'https://example.com/',
+      title: 'Example',
+      snapshot: '- document:\n  - heading "Hi"',
+    })
+  })
+
+  it('selectOption passes values array to locator', async () => {
+    const { page, locator } = mockPage()
+    await browse.selectOption(page as never, 'combobox', 'Choose', ['a', 'b'])
+    expect(locator.selectOption).toHaveBeenCalledWith(['a', 'b'])
+  })
+
+  it('pressKey presses the given key', async () => {
+    const { page } = mockPage()
+    await browse.pressKey(page as never, 'Escape')
+    expect(page.keyboard.press).toHaveBeenCalledWith('Escape')
   })
 
   it('waitFor waits on a role+name locator', async () => {
