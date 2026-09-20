@@ -38,10 +38,58 @@ Both wrap the exact same tools ([`src/tools.ts`](src/tools.ts)):
     -> 502 { "error", "final_url" }   on a fetch failure
   GET  /health -> 200 { "status": "ok" }
   ```
+  It also exposes a session-based browsing surface over REST — see
+  [Interactive sessions](#interactive-sessions) below.
 - **MCP** ([`src/standalone.ts`](src/standalone.ts)) — a stdio MCP server exposing the full
   interactive browse surface (`fetch_page` plus `browse_navigate` / `browse_snapshot` /
   `browse_click` / `browse_type` / …) for an agent or the browse-bench harness to drive
   multi-step sessions.
+
+## Interactive sessions
+
+For multi-step browsing (navigate, then click, then read the result) `POST /fetch` isn't enough
+— each call is a fresh one-shot page load. The `/sessions` routes give a REST client the same
+stateful, multi-step browsing the MCP `browse_*` tools give an agent: create a session, then
+drive one real browser page across several calls, then close it.
+
+```
+POST   /sessions                    -> 201 { "session_id", "expires_in_ms" }
+DELETE /sessions/:id                -> 204
+
+POST   /sessions/:id/navigate  { "url", "wait_for"?, "timeout_ms"? }
+POST   /sessions/:id/snapshot
+POST   /sessions/:id/click     { "role", "name" }
+POST   /sessions/:id/type      { "role", "name", "text", "submit"? }
+POST   /sessions/:id/scroll    { "direction"?: "up"|"down", "amount"? }
+POST   /sessions/:id/back
+POST   /sessions/:id/select    { "role", "name", "values": [...] }
+POST   /sessions/:id/press     { "key" }
+POST   /sessions/:id/wait      { "wait_for", "timeout_ms"? }
+```
+
+Every op that touches the page (`navigate`, `snapshot`, `click`, `type`, `scroll`, `back`,
+`select`, `press`, `wait`) responds with the same envelope, taken from the page after the op
+runs:
+
+```json
+{ "url": "https://example.com/", "title": "Example Domain", "snapshot": "- document ..." }
+```
+
+`wait_for` (used by both `navigate`'s optional field and the standalone `wait` op) is one of:
+
+- `{ "role": "...", "name": "..." }` — wait for an element with that accessible role/name to
+  appear.
+- `{ "text": "..." }` — wait for that text to appear anywhere on the page.
+
+Sessions are capped and expire on their own — see `WEBFETCH_MAX_SESSIONS` and
+`WEBFETCH_SESSION_TTL_MS` in [Configuration](#configuration).
+
+Sessions live **in memory only** — a server restart drops them all, and ops against a session
+that's gone (expired, closed, or never existed) return `404`. There's no way to recover a lost
+session; the client should just create a new one.
+
+Operations on the same session are serialized (one browser page can only do one thing at a
+time), but different sessions run independently.
 
 ## Run
 
@@ -53,7 +101,10 @@ npm run server        # REST service on :9000  (dev, via tsx)
 npm run standalone    # stdio MCP server         (dev, via tsx)
 
 npm run build         # compile to dist/
-npm test              # unit tests (reddit parsing / block detection)
+npm test              # unit tests (reddit parsing / block detection / routes / sessions)
+
+npm run test:integration          # live Reddit fetches (needs network; REDDIT_INTEGRATION=1)
+npm run test:integration:browse   # live session API against a real Camoufox (BROWSE_INTEGRATION=1)
 ```
 
 ### Docker
@@ -70,8 +121,10 @@ need a tweak on a first real build.
 
 ## Configuration
 
-| Env var             | Default    | Meaning                                                  |
-| ------------------- | ---------- | -------------------------------------------------------- |
-| `PORT`              | `9000`     | REST listen port.                                        |
-| `WEBFETCH_DB`       | `:memory:` | SQLite path for the per-domain method-learning store.    |
-| `WEBFETCH_HEADLESS` | `true`     | Set `false` to launch Camoufox headed (local debugging). |
+| Env var                   | Default    | Meaning                                                             |
+| ------------------------- | ---------- | ------------------------------------------------------------------- |
+| `PORT`                    | `9000`     | REST listen port.                                                   |
+| `WEBFETCH_DB`             | `:memory:` | SQLite path for the per-domain method-learning store.               |
+| `WEBFETCH_HEADLESS`       | `true`     | Set `false` to launch Camoufox headed (local debugging).            |
+| `WEBFETCH_MAX_SESSIONS`   | `3`        | Max concurrent `/sessions`; `POST /sessions` past the cap is `429`. |
+| `WEBFETCH_SESSION_TTL_MS` | `300000`   | Idle timeout (ms) for a session; each op resets the timer.          |
