@@ -91,6 +91,10 @@ session; the client should just create a new one.
 Operations on the same session are serialized (one browser page can only do one thing at a
 time), but different sessions run independently.
 
+The whole REST surface (this plus `/fetch` and `/health`) is described by an OpenAPI 3.1
+document the service serves at `GET /openapi.json`, so a client or agent can discover it at
+runtime.
+
 ## Run
 
 ```sh
