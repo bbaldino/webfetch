@@ -64,7 +64,9 @@ export class BrowserManager {
       try {
         this.seeds.set(context, await this.jar.inject(context))
       } catch (err) {
-        console.error(`cookie jar inject failed: ${(err as Error).message}`)
+        console.error(
+          `cookie jar inject failed; this context runs without jar cookies (${(err as Error).name})`,
+        )
       }
     }
     return context

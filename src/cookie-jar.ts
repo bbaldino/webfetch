@@ -25,9 +25,47 @@ const sameExpiry = (a: number, b: number) => Math.abs(a - b) < 1
 // whatever's already in the jar for that site.
 const related = (d: string, j: string) => d === j || d.endsWith(`.${j}`) || j.endsWith(`.${d}`)
 
-// Playwright rejects SameSite=None without Secure; downgrade rather than drop the cookie.
-const sanitize = (c: Cookie): Cookie =>
-  c.sameSite === 'None' && !c.secure ? { ...c, sameSite: 'Lax' } : c
+// Playwright's own ceiling for a cookie expiry (year 9999).
+const MAX_EXPIRES = 253402300799
+
+const SAME_SITE: Record<string, Cookie['sameSite']> = {
+  strict: 'Strict',
+  lax: 'Lax',
+  none: 'None',
+  no_restriction: 'None', // browser-extension exporters
+}
+
+const str = (v: unknown): v is string => typeof v === 'string'
+
+/**
+ * Validate and normalize one jar entry into something Playwright's addCookies accepts, or
+ * undefined if it can't be used. Playwright validates the whole batch, so a single bad
+ * entry left in would cost every cookie in the jar.
+ */
+function normalize(raw: unknown): Cookie | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  if (!str(r.name) || !r.name || !str(r.value) || !str(r.domain) || !r.domain) return undefined
+  if (!str(r.path) || !r.path) return undefined
+  const expires =
+    typeof r.expires === 'number' && Number.isFinite(r.expires)
+      ? Math.min(r.expires, MAX_EXPIRES)
+      : -1
+  const secure = r.secure === true
+  let sameSite = SAME_SITE[str(r.sameSite) ? r.sameSite.toLowerCase() : ''] ?? 'Lax'
+  // Playwright rejects SameSite=None without Secure; downgrade rather than drop the cookie.
+  if (sameSite === 'None' && !secure) sameSite = 'Lax'
+  return {
+    name: r.name,
+    value: r.value,
+    domain: r.domain,
+    path: r.path,
+    expires,
+    httpOnly: r.httpOnly === true,
+    secure,
+    sameSite,
+  }
+}
 
 export class CookieJar {
   private jar: Cookie[] = []
@@ -58,7 +96,12 @@ export class CookieJar {
     try {
       const parsed: unknown = JSON.parse(readFileSync(this.path, 'utf8'))
       if (!Array.isArray(parsed)) throw new Error('expected a JSON array')
-      this.jar = parsed as Cookie[]
+      const valid = parsed.map(normalize).filter((c): c is Cookie => c !== undefined)
+      const dropped = parsed.length - valid.length
+      if (dropped > 0) {
+        console.error(`cookie jar ${this.path}: skipped ${dropped} invalid cookie entries`)
+      }
+      this.jar = valid
     } catch (err) {
       console.error(`cookie jar ${this.path}: ignoring malformed file (${(err as Error).name})`)
       this.jar = []
@@ -83,8 +126,27 @@ export class CookieJar {
 
   /** Seed a context with the jar; returns what was injected, for mergeChanged() on close. */
   async inject(context: Pick<BrowserContext, 'addCookies'>): Promise<CookieSeed> {
-    const cookies = this.cookies().map(sanitize)
-    if (cookies.length > 0) await context.addCookies(cookies)
+    let cookies = this.cookies()
+    if (cookies.length === 0) return new Map()
+    try {
+      await context.addCookies(cookies)
+    } catch {
+      // The browser rejected the batch (all-or-nothing): add one at a time so a single
+      // cookie it won't take doesn't cost the whole jar.
+      const accepted: Cookie[] = []
+      for (const c of cookies) {
+        try {
+          await context.addCookies([c])
+          accepted.push(c)
+        } catch {
+          /* skipped; counted below */
+        }
+      }
+      console.error(
+        `cookie jar: the browser rejected ${cookies.length - accepted.length} of ${cookies.length} cookies; injected the rest`,
+      )
+      cookies = accepted
+    }
     return new Map(cookies.map((c) => [cookieKey(c), { value: c.value, expires: c.expires }]))
   }
 

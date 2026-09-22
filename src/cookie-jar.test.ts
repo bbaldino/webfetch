@@ -231,4 +231,71 @@ describe('CookieJar', () => {
       expect(byName.keep.expires).toBe(future + 0.5) // untouched: drift isn't a change
     })
   })
+
+  describe('per-cookie validation (I1)', () => {
+    it('normalizes sameSite casing, coerces a non-number expires, and fixes None-without-Secure', () => {
+      writeFileSync(
+        path,
+        JSON.stringify([
+          { ...ck('a', '.yelp.com'), sameSite: 'lax' },
+          { ...ck('b', '.yelp.com'), sameSite: 'strict' },
+          { ...ck('c', '.yelp.com'), sameSite: 'no_restriction', secure: true },
+          { ...ck('d', '.yelp.com'), sameSite: 'none', secure: false },
+          { ...ck('e', '.yelp.com'), expires: 'soon' },
+          { ...ck('f', '.yelp.com'), sameSite: undefined, httpOnly: undefined },
+        ]),
+      )
+      const byName = Object.fromEntries(new CookieJar(path).cookies().map((c) => [c.name, c]))
+      expect(byName.a.sameSite).toBe('Lax')
+      expect(byName.b.sameSite).toBe('Strict')
+      expect(byName.c.sameSite).toBe('None')
+      expect(byName.d.sameSite).toBe('Lax')
+      expect(byName.e.expires).toBe(-1)
+      expect(byName.f).toMatchObject({ sameSite: 'Lax', httpOnly: false })
+    })
+
+    it('drops invalid entries, logging only a count, and keeps the rest', () => {
+      writeFileSync(
+        path,
+        JSON.stringify([
+          ck('good', '.yelp.com', 'secretvalue'),
+          { name: 'nodomain', value: 'secretvalue', path: '/' },
+          { ...ck('nopath', '.yelp.com', 'secretvalue'), path: undefined },
+          { ...ck('novalue', '.yelp.com'), value: 42 },
+          { ...ck('', '.yelp.com') },
+          'not an object',
+          null,
+        ]),
+      )
+      const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const jar = new CookieJar(path)
+      expect(jar.cookies().map((c) => c.name)).toEqual(['good'])
+      expect(() => jar.covers('www.yelp.com')).not.toThrow()
+      const logged = warn.mock.calls.map((c) => String(c[0])).join('\n')
+      expect(logged).toContain('6')
+      expect(logged).not.toMatch(/secretvalue|nodomain|nopath|novalue/)
+      warn.mockRestore()
+    })
+
+    it('falls back to one-at-a-time when the batch is rejected, skipping only the bad cookie', async () => {
+      writeFileSync(
+        path,
+        JSON.stringify([ck('a', '.yelp.com'), ck('bad', '.yelp.com'), ck('c', '.yelp.com')]),
+      )
+      const added: string[] = []
+      const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
+      const seed = await new CookieJar(path).inject({
+        addCookies: async (cs) => {
+          if (cs.some((c) => c.name === 'bad')) throw new Error('Browser.setCookies failed')
+          added.push(...cs.map((c) => c.name))
+        },
+      })
+      expect(added).toEqual(['a', 'c'])
+      expect(seed.size).toBe(2) // the skipped cookie isn't part of the seed
+      const logged = warn.mock.calls.map((c) => String(c[0])).join('\n')
+      expect(logged).toContain('1 of 3')
+      expect(logged).not.toMatch(/re-export|bad/)
+      warn.mockRestore()
+    })
+  })
 })
