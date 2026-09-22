@@ -53,4 +53,18 @@ describe('createMcpServer', () => {
     expect(res.isError).toBe(true)
     expect((res.content as { type: string; text: string }[])[0].text).toBe('invalid role: nope')
   })
+
+  it('marks a result carrying a non-empty error as isError, keeping its JSON content', async () => {
+    const failed = { url: 'u', method: 'browser', content: 'blocked', error: 'blocked by x' }
+    const client = await connect(async () => failed)
+    const res = await client.callTool({ name: 'fetch_page', arguments: { url: 'u' } })
+    expect(res.isError).toBe(true)
+    expect(JSON.parse((res.content as { type: string; text: string }[])[0].text)).toEqual(failed)
+  })
+
+  it('does not mark a successful result as isError', async () => {
+    const client = await connect(async () => ({ url: 'u', content: 'ok' }))
+    const res = await client.callTool({ name: 'fetch_page', arguments: { url: 'u' } })
+    expect(res.isError).toBeFalsy()
+  })
 })

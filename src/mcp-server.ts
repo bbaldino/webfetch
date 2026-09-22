@@ -30,7 +30,15 @@ export function createMcpServer(opts: {
         (req.params.arguments ?? {}) as Record<string, unknown>,
       )
       const text = typeof result === 'string' ? result : JSON.stringify(result)
-      return { content: [{ type: 'text', text }] }
+      // A tool that reports failure in its result (fetch_page's `error` field) rather than
+      // throwing is still a failure to the client: flag it like a thrown error, but keep the
+      // full JSON so the url/method/content stay visible.
+      const failed =
+        typeof result === 'object' &&
+        result !== null &&
+        typeof (result as { error?: unknown }).error === 'string' &&
+        (result as { error: string }).error !== ''
+      return { content: [{ type: 'text', text }], ...(failed ? { isError: true } : {}) }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       return { content: [{ type: 'text', text: message }], isError: true }

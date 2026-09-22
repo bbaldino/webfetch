@@ -136,4 +136,14 @@ describe('BrowseController', () => {
     const { page } = mockPage()
     expect((await browse.snapshot(page as never)).blocked).toBeUndefined()
   })
+
+  it('omits blocked for a normal page whose frames are not captchas', async () => {
+    const { page } = mockPage({
+      frames: () => [
+        { url: () => 'https://example.com/' },
+        { url: () => 'https://www.youtube.com/embed/abc' },
+      ],
+    })
+    expect((await browse.snapshot(page as never)).blocked).toBeUndefined()
+  })
 })

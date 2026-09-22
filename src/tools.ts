@@ -40,7 +40,7 @@ function htmlToText(html: string): string {
  * Heuristic: is the fetched HTML content likely usable?
  * Returns false if it looks like a JS-only page, captcha wall, etc.
  */
-function isContentUsable(text: string): boolean {
+export function isContentUsable(text: string): boolean {
   // Very short content after stripping tags is suspicious
   if (text.length < 200) return false
   // Common indicators of blocked/JS-required pages
@@ -56,7 +56,7 @@ function isContentUsable(text: string): boolean {
   ]
   const lower = text.toLowerCase()
   for (const pattern of blockedPatterns) {
-    if (lower.includes(pattern) && text.length < 2000) return true // Only flag if page is mostly just this
+    if (lower.includes(pattern) && text.length < 2000) return false // Only flag if page is mostly just this
   }
   return true
 }
