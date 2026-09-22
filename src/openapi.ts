@@ -173,7 +173,10 @@ export const openapiSpec = {
     description:
       'Self-hosted web-fetch service. One-shot POST /fetch, plus a /sessions API for multi-step interactive browsing (navigate, click, type, snapshot) over one real browser page. LAN-only, no auth.',
   },
-  tags: [{ name: 'sessions', description: 'Stateful, multi-step interactive browsing.' }],
+  tags: [
+    { name: 'sessions', description: 'Stateful, multi-step interactive browsing.' },
+    { name: 'mcp', description: 'The Model Context Protocol Streamable-HTTP endpoint.' },
+  ],
   paths: {
     '/health': {
       get: {
@@ -269,6 +272,25 @@ export const openapiSpec = {
       },
     },
     ...sessionOpPaths,
+    '/mcp': {
+      post: {
+        operationId: 'mcp',
+        summary: 'MCP Streamable-HTTP endpoint (JSON-RPC; use an MCP client)',
+        description:
+          'Not a normal REST resource — this is the Model Context Protocol Streamable HTTP ' +
+          'transport (JSON-RPC 2.0 over POST, with an `Mcp-Session-Id` header identifying the ' +
+          'client after `initialize`). Exposes the same tool set as the stdio `standalone.ts` ' +
+          'server: `fetch_page` plus the `browse_*` tools (navigate, snapshot, click, type, ' +
+          'scroll, back, select, press, wait), each MCP client driving its own capped browser ' +
+          'session. Connect with an MCP SDK client (e.g. `StreamableHTTPClientTransport`) rather ' +
+          'than calling this path directly — the request/response bodies are JSON-RPC envelopes ' +
+          'and are not modeled here.',
+        tags: ['mcp'],
+        responses: {
+          '200': { description: 'JSON-RPC response or event stream, per the MCP spec.' },
+        },
+      },
+    },
   },
   components: {
     schemas: {
