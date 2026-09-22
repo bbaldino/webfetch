@@ -1,6 +1,6 @@
 {
   "name": "webfetch",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "A self-hosted web-fetch service: tiered HTTP→browser fetching with stealth (Camoufox), a Reddit chain, and per-domain method learning, behind a REST /fetch face and an MCP browse surface.",
   "type": "module",
   "private": true,

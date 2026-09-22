@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.5.0](https://github.com/bbaldino/webfetch/compare/v0.4.0...v0.5.0) (2026-09-22)
+
+
+### Features
+
+* CookieJar — hot-reloaded jar with scoped write-back ([188a633](https://github.com/bbaldino/webfetch/commit/188a6331453010e913ac89af775e82e61d42e6c2))
+* detect bot-protection walls and phrase block notices ([9fc3f42](https://github.com/bbaldino/webfetch/commit/9fc3f42e3b01d15686faf18575484c2c7bc14109))
+* export-cookies CLI to build a jar from desktop Chrome ([c73bc2d](https://github.com/bbaldino/webfetch/commit/c73bc2d200a1963002ce304975038aec393561ba))
+* seed every browser context from the cookie jar ([63b7d06](https://github.com/bbaldino/webfetch/commit/63b7d068aace5e2cb77ea0a12626563e1c1f3beb))
+
+
+### Bug Fixes
+
+* BrowserManager — ordered write-back tests, track temp contexts, idempotent close ([942bfca](https://github.com/bbaldino/webfetch/commit/942bfcaa24ec89c0fbe5b5a67062ca9fc99f7125))
+* cookie-jar reload, write-back and coverage edge cases ([f6071ec](https://github.com/bbaldino/webfetch/commit/f6071ec3241de098c68dfb1d530991680c46c664))
+* CookieJar — don't drop a merge racing an in-flight write ([490d216](https://github.com/bbaldino/webfetch/commit/490d2167b29fef98c48348cf7b7aa2b7e71cf1fb))
+* export-cookies — copy WAL sidecars, tighten error handling ([420259a](https://github.com/bbaldino/webfetch/commit/420259a932ffa347469923cc8434022116857aec))
+* export-cookies rejects a non-array jar and never writes at 0644 ([0de9d0c](https://github.com/bbaldino/webfetch/commit/0de9d0cffa989c0baf150de7390dde3b1cb9ccec))
+* report bot walls and empty pages as errors, not empty successes ([9d64c37](https://github.com/bbaldino/webfetch/commit/9d64c37f5901d6b564642a1159d32f02b1090b03))
+* treat short bot-wall pages and MCP fetch failures as errors ([d1b5561](https://github.com/bbaldino/webfetch/commit/d1b5561a012c757c050e5d7f494488b65f149c9d))
+* validate jar cookies one by one so a bad entry can't void the jar ([374e49d](https://github.com/bbaldino/webfetch/commit/374e49d3dd1fd7ae37bd3469360d16e64875bf0c))
+* write back only cookies a context changed, not its seed copy ([b4d1e2d](https://github.com/bbaldino/webfetch/commit/b4d1e2d568325976b89156664a4dae9a760e3c39))
+
 ## [0.4.0](https://github.com/bbaldino/webfetch/compare/v0.3.0...v0.4.0) (2026-09-22)
 
 
