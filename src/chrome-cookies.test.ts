@@ -114,6 +114,32 @@ describe('readChromeCookies', () => {
       },
     ])
   })
+
+  it('reads a cookie that only lives in the -wal file (WAL mode, not yet checkpointed)', () => {
+    db = join(dir, 'Cookies')
+    const d = new Database(db)
+    d.pragma('journal_mode = WAL')
+    d.pragma('wal_autocheckpoint = 0')
+    d.exec(`CREATE TABLE meta(key TEXT, value TEXT);
+            CREATE TABLE cookies(host_key TEXT, name TEXT, value TEXT, encrypted_value BLOB, path TEXT,
+              expires_utc INTEGER, is_secure INTEGER, is_httponly INTEGER, samesite INTEGER);`)
+    d.prepare(`INSERT INTO meta VALUES ('version', ?)`).run('24')
+    d.prepare(`INSERT INTO cookies VALUES (?, ?, '', ?, '/', ?, 1, 1, ?)`).run(
+      '.yelp.com',
+      'datadome',
+      encrypt('dd', '.yelp.com', SECRET, 'v11', 24),
+      CHROME_2026,
+      0,
+    )
+    try {
+      // Connection stays open (no checkpoint): the row lives only in Cookies-wal.
+      const out = readChromeCookies(db, { secret: SECRET, domains: ['yelp.com'] })
+      expect(out).toHaveLength(1)
+      expect(out[0].value).toBe('dd')
+    } finally {
+      d.close()
+    }
+  })
 })
 
 describe('mergeJar', () => {

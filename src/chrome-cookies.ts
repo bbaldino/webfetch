@@ -37,6 +37,9 @@ export function decryptValue(
     }
     plain = plain.subarray(32)
   }
+  // For schema < 24 there's no host-hash to check, so a wrong key is only caught above via
+  // a PKCS7 padding failure — which can rarely still "succeed" on garbage plaintext, in
+  // which case this returns junk rather than throwing.
   return plain.toString('utf8')
 }
 
@@ -75,6 +78,11 @@ export function readChromeCookies(
     const copy = join(dir, 'Cookies')
     copyFileSync(dbPath, copy)
     if (existsSync(`${dbPath}-journal`)) copyFileSync(`${dbPath}-journal`, `${copy}-journal`)
+    // In WAL mode, recent writes (e.g. a freshly rotated datadome cookie) live only in
+    // -wal until Chrome checkpoints it into the main file — copy the sidecars too, or a
+    // main-file-only copy silently reads stale data.
+    if (existsSync(`${dbPath}-wal`)) copyFileSync(`${dbPath}-wal`, `${copy}-wal`)
+    if (existsSync(`${dbPath}-shm`)) copyFileSync(`${dbPath}-shm`, `${copy}-shm`)
     const db = new Database(copy, { readonly: true })
     try {
       const schema = Number(
@@ -94,6 +102,11 @@ export function readChromeCookies(
         .filter((r) => opts.domains.some((d) => matchesDomain(r.host_key, d)))
         .map((r) => ({
           name: r.name,
+          // Deliberately let decryptValue's WrongSecretError propagate and abort the whole
+          // export rather than skipping the one cookie: a decrypt failure means the
+          // keyring secret is wrong or missing, which is systematic (every keyring-
+          // encrypted cookie will fail the same way), and a partial jar that's silently
+          // missing e.g. the datadome cookie is worse than a loud, obvious failure.
           value: r.encrypted_value?.length
             ? decryptValue(r.encrypted_value, r.host_key, keys, schema)
             : r.value,

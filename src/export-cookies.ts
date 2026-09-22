@@ -7,7 +7,7 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import type { Cookie } from 'playwright-core'
-import { mergeJar, readChromeCookies, WrongSecretError } from './chrome-cookies.js'
+import { matchesDomain, mergeJar, readChromeCookies, WrongSecretError } from './chrome-cookies.js'
 
 const { values } = parseArgs({
   options: {
@@ -57,16 +57,20 @@ try {
   throw err
 }
 
-const existing: Cookie[] = existsSync(values.out)
-  ? JSON.parse(readFileSync(values.out, 'utf8'))
-  : []
+let existing: Cookie[] = []
+if (existsSync(values.out)) {
+  try {
+    existing = JSON.parse(readFileSync(values.out, 'utf8'))
+  } catch {
+    console.error(`existing cookie jar ${values.out} is not valid JSON`)
+    process.exit(1)
+  }
+}
 writeFileSync(values.out, JSON.stringify(mergeJar(existing, fresh, domains)), { mode: 0o600 })
 chmodSync(values.out, 0o600)
 
 for (const d of domains) {
-  console.log(
-    `${d}: ${fresh.filter((c) => c.domain.replace(/^\./, '').endsWith(d)).length} cookies`,
-  )
+  console.log(`${d}: ${fresh.filter((c) => matchesDomain(c.domain, d)).length} cookies`)
 }
 console.log(`\nwrote ${values.out}. Copy it to webfetch with:`)
 console.log(
