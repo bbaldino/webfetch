@@ -2,12 +2,9 @@
 // Linux Chrome encrypts values with a key derived from the keyring secret ("v11") or, with
 // no keyring, the fixed "peanuts" password ("v10"). DB schema >= 24 prefixes each
 // plaintext with SHA256(host_key), which doubles as a check that the secret is right.
-import Database from 'better-sqlite3'
 import { createDecipheriv, createHash, pbkdf2Sync } from 'node:crypto'
-import { copyFileSync, existsSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import type { Cookie } from 'playwright-core'
+import { withSqliteCopy } from './sqlite-copy.js'
 
 export class WrongSecretError extends Error {}
 
@@ -72,57 +69,39 @@ export function readChromeCookies(
   dbPath: string,
   opts: { secret?: string; domains: string[] },
 ): Cookie[] {
-  // Chrome keeps the DB locked while running: read a copy.
-  const dir = mkdtempSync(join(tmpdir(), 'webfetch-cookies-'))
-  try {
-    const copy = join(dir, 'Cookies')
-    copyFileSync(dbPath, copy)
-    if (existsSync(`${dbPath}-journal`)) copyFileSync(`${dbPath}-journal`, `${copy}-journal`)
-    // In WAL mode, recent writes (e.g. a freshly rotated datadome cookie) live only in
-    // -wal until Chrome checkpoints it into the main file — copy the sidecars too, or a
-    // main-file-only copy silently reads stale data.
-    if (existsSync(`${dbPath}-wal`)) copyFileSync(`${dbPath}-wal`, `${copy}-wal`)
-    if (existsSync(`${dbPath}-shm`)) copyFileSync(`${dbPath}-shm`, `${copy}-shm`)
-    const db = new Database(copy, { readonly: true })
-    try {
-      const schema = Number(
-        (db.prepare(`SELECT value FROM meta WHERE key = 'version'`).get() as { value: string })
-          .value,
-      )
-      const keys = {
-        v10: deriveKey('peanuts'),
-        v11: opts.secret ? deriveKey(opts.secret) : undefined,
-      }
-      const rows = db
-        .prepare(
-          `SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite FROM cookies`,
-        )
-        .all() as Row[]
-      return rows
-        .filter((r) => opts.domains.some((d) => matchesDomain(r.host_key, d)))
-        .map((r) => ({
-          name: r.name,
-          // Deliberately let decryptValue's WrongSecretError propagate and abort the whole
-          // export rather than skipping the one cookie: a decrypt failure means the
-          // keyring secret is wrong or missing, which is systematic (every keyring-
-          // encrypted cookie will fail the same way), and a partial jar that's silently
-          // missing e.g. the datadome cookie is worse than a loud, obvious failure.
-          value: r.encrypted_value?.length
-            ? decryptValue(r.encrypted_value, r.host_key, keys, schema)
-            : r.value,
-          domain: r.host_key,
-          path: r.path,
-          expires: chromeTimeToUnix(r.expires_utc),
-          httpOnly: r.is_httponly === 1,
-          secure: r.is_secure === 1,
-          sameSite: chromeSameSite(r.samesite),
-        }))
-    } finally {
-      db.close()
+  return withSqliteCopy(dbPath, (db) => {
+    const schema = Number(
+      (db.prepare(`SELECT value FROM meta WHERE key = 'version'`).get() as { value: string }).value,
+    )
+    const keys = {
+      v10: deriveKey('peanuts'),
+      v11: opts.secret ? deriveKey(opts.secret) : undefined,
     }
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
+    const rows = db
+      .prepare(
+        `SELECT host_key, name, value, encrypted_value, path, expires_utc, is_secure, is_httponly, samesite FROM cookies`,
+      )
+      .all() as Row[]
+    return rows
+      .filter((r) => opts.domains.some((d) => matchesDomain(r.host_key, d)))
+      .map((r) => ({
+        name: r.name,
+        // Deliberately let decryptValue's WrongSecretError propagate and abort the whole
+        // export rather than skipping the one cookie: a decrypt failure means the
+        // keyring secret is wrong or missing, which is systematic (every keyring-
+        // encrypted cookie will fail the same way), and a partial jar that's silently
+        // missing e.g. the datadome cookie is worse than a loud, obvious failure.
+        value: r.encrypted_value?.length
+          ? decryptValue(r.encrypted_value, r.host_key, keys, schema)
+          : r.value,
+        domain: r.host_key,
+        path: r.path,
+        expires: chromeTimeToUnix(r.expires_utc),
+        httpOnly: r.is_httponly === 1,
+        secure: r.is_secure === 1,
+        sameSite: chromeSameSite(r.samesite),
+      }))
+  })
 }
 
 export function mergeJar(existing: Cookie[], fresh: Cookie[], domains: string[]): Cookie[] {

@@ -136,26 +136,33 @@ look like the same trusted visitor who's been browsing the site for months. webf
 automatically for every browser context — `fetch_page`, `/sessions`, and the MCP `browse_*`
 tools all share one jar — so once a domain's cookies are in it, it just works.
 
-**Export**, on the desktop where the site already works in a normal Chrome:
+**Export**, on the desktop where the site already works in a normal Chrome or Firefox:
 
 ```sh
 npm run export-cookies -- --domain yelp.com [--domain other.com]
 ```
 
-This reads Chrome's cookie database directly, so it needs the OS keyring secret Chrome encrypts
-cookies with; on Linux that's `secret-tool` (`gnome-keyring` / `libsecret`), which the tool shells
-out to automatically. Only the named domains are read and written — nothing else in the browser's
-cookie store is touched. Options:
+This reads the browser's cookie database directly (from a copy, so the browser can stay open).
+Firefox stores cookies unencrypted, so nothing else is needed. Chrome encrypts them with an OS
+keyring secret; on Linux the tool gets it from `secret-tool` (`gnome-keyring` / `libsecret`)
+automatically. Only the named domains are read and written — nothing else in the browser's cookie
+store is touched — and expired cookies are dropped. If a domain has no cookies in the profile it
+read (wrong browser or profile, or a site never visited there), it exits with an error instead of
+writing a jar that would only look stale later. Options:
 
 - `--domain D` (repeatable, required) — a site to export; its subdomains are included.
-- `--profile DIR` — the Chrome profile to read (default `~/.config/google-chrome/Default`).
+- `--browser chrome|firefox` — which browser to read. By default it uses whichever one is
+  installed, and asks you to pick if it finds both.
+- `--profile DIR` — the profile to read; the browser is inferred from its files. Defaults to
+  Chrome's `~/.config/google-chrome/Default`, or Firefox's default profile from `profiles.ini`
+  (classic, XDG, Snap and Flatpak locations).
 - `--out FILE` — the jar to write (default `./cookies.json`, which is gitignored). An existing jar
   is merged: the named domains are replaced, every other domain's cookies are kept. The file is
   always left at mode `600`.
-- `--secret-file FILE` — read the keyring secret from a file instead of `secret-tool`, for setups
-  without libsecret.
+- `--secret-file FILE` — Chrome only: read the keyring secret from a file instead of
+  `secret-tool`, for setups without libsecret.
 
-It prints only a per-domain cookie count, never cookie names or values.
+It prints the profile it read and a per-domain cookie count, never cookie names or values.
 
 **Deliver** the exported file to the running service (the export command prints this exact line
 with your paths filled in):
