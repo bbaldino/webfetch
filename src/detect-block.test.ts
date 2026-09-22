@@ -55,6 +55,16 @@ describe('detectBlock', () => {
     expect(detectBlock({ status: 429, text: 'slow down' })).toBe('http-429')
   })
 
+  it('flags DataDome challenge even with substantial page text when captcha iframe is present', () => {
+    const text = 'x'.repeat(5000) + ' some real content here'
+    expect(
+      detectBlock({
+        text,
+        frameUrls: ['https://geo.captcha-delivery.com/captcha/?x=1'],
+      }),
+    ).toBe('datadome')
+  })
+
   it('does not flag real pages that merely mention captcha or load bot scripts', () => {
     const text = 'x'.repeat(5000) + ' we use a captcha on our signup form'
     expect(
@@ -83,5 +93,11 @@ describe('blockNotice', () => {
     expect(n.hint).toContain("wayfair.com's bot protection")
     expect(n.hint).toContain('export')
     expect(n.hint).not.toContain('look stale')
+  })
+
+  it('handles invalid URLs gracefully without throwing', () => {
+    const n = blockNotice('not a url', 'http-403')
+    expect(n.reason).toBe('http-403')
+    expect(n.hint).toContain('bot protection')
   })
 })
