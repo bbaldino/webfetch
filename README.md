@@ -145,7 +145,17 @@ npm run export-cookies -- --domain yelp.com [--domain other.com]
 This reads Chrome's cookie database directly, so it needs the OS keyring secret Chrome encrypts
 cookies with; on Linux that's `secret-tool` (`gnome-keyring` / `libsecret`), which the tool shells
 out to automatically. Only the named domains are read and written — nothing else in the browser's
-cookie store is touched.
+cookie store is touched. Options:
+
+- `--domain D` (repeatable, required) — a site to export; its subdomains are included.
+- `--profile DIR` — the Chrome profile to read (default `~/.config/google-chrome/Default`).
+- `--out FILE` — the jar to write (default `./cookies.json`, which is gitignored). An existing jar
+  is merged: the named domains are replaced, every other domain's cookies are kept. The file is
+  always left at mode `600`.
+- `--secret-file FILE` — read the keyring secret from a file instead of `secret-tool`, for setups
+  without libsecret.
+
+It prints only a per-domain cookie count, never cookie names or values.
 
 **Deliver** the exported file to the running service (the export command prints this exact line
 with your paths filled in):
@@ -158,7 +168,9 @@ No restart needed: the jar is **hot-reloaded** — webfetch stats the file befor
 context and re-reads it if it changed, so a copied-in jar takes effect on the very next fetch or
 session. Cookies a site rotates during a visit are **written back** to the jar when a context
 closes (debounced, atomic, mode `600`), but only for domains the jar already covers — it never
-picks up cookies from arbitrary sites the browser happens to visit.
+picks up cookies from arbitrary sites the browser happens to visit. Only cookies the context
+actually changed are written back, so a session that was open while you re-delivered the jar can't
+revert it when it closes, and new session-only cookies aren't persisted.
 
 Point webfetch at a different jar path with `WEBFETCH_COOKIE_JAR` (default `/data/cookies.json`);
 a missing file just means an empty jar, not an error.
@@ -171,11 +183,12 @@ above. The session/MCP `browse_*` envelope carries the same signal as an optiona
 [Interactive sessions](#interactive-sessions)).
 
 **Security:** the jar holds live session cookies for the exported domains — potentially a
-logged-in account. It's written mode `600`, its contents are never logged (not even cookie
-names on their own get printed by anything but this export tool, and never values), and
-write-back only ever touches domains already in the jar. Keep webfetch LAN-only — never expose
-its port externally — since a browser seeded with real cookies is a more valuable target than a
-stateless fetcher.
+logged-in account. It's written mode `600`, no cookie names or values are ever logged or printed
+(by the service or the export tool, which prints counts only), and write-back only ever touches
+domains already in the jar. The stale-vs-export wording of a block message does tell any caller
+of the API whether the jar holds cookies for that site, so it reveals the jar's domain coverage
+(never its contents) to LAN callers. Keep webfetch LAN-only — never expose its port externally —
+since a browser seeded with real cookies is a more valuable target than a stateless fetcher.
 
 ## Run
 

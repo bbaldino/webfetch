@@ -1,6 +1,6 @@
 # Cookie-jar seeding for bot-protected sites — design
 
-**Status:** approved design, pre-implementation
+**Status:** implemented (branch `feat/cookie-jar`)
 **Date:** 2026-09-22
 
 ## Goal
@@ -76,9 +76,21 @@ desktop Chrome ──export-cookies──▶ cookies.json ──copy──▶ /d
   expired ones, and write atomically (temp file + rename, mode `600`),
   debounced and serialized so concurrent closes don't clobber each other. Only
   domains already in the jar are ever written back — the jar never
-  accumulates cookies from arbitrary sites the browser visits.
-- A malformed file logs one warning (to stderr) and is treated as empty; it
-  never crashes the service. Cookie values are never logged.
+  accumulates cookies from arbitrary sites the browser visits. Session
+  cookies (`expires: -1`) are only updated if already in the jar, never added.
+- **Seed-diffed write-back (`mergeChanged`):** `inject` returns the seed it
+  injected (key → value + expiry); `BrowserManager` keeps it per context and,
+  on close, only cookies that are new or whose value/expiry differ from that
+  seed are merged. A context's unchanged seed copy therefore can't revert a
+  rotation from another context or a jar re-delivered while it was open.
+- **Per-cookie validation:** each loaded entry must have string
+  `name`/`value`/`domain`/`path`; `sameSite` is case-folded, a non-number
+  `expires` becomes `-1`, None-without-Secure is downgraded to Lax. Invalid
+  entries are dropped with a count-only warning. If the browser still rejects
+  the batch, cookies are added one at a time and the rejects skipped.
+- A malformed file logs one warning (to stderr) and keeps the previously
+  loaded jar (empty on first load), retrying on the next call; it never
+  crashes the service. Cookie names and values are never logged.
 
 ### 2. `BrowserManager` integration
 
@@ -90,7 +102,7 @@ path), so this is the single integration point:
   sanitized so Playwright accepts them (e.g. `sameSite: 'None'` requires
   `secure`; `expires: -1` for session cookies).
 - Before closing a context (session close/TTL eviction, temp-page close, and
-  `BrowserManager.close()` at shutdown): `jar.merge(await context.cookies())`,
+  `BrowserManager.close()` at shutdown): `jar.mergeChanged(seed, await context.cookies())`,
   best-effort — a failed write-back never fails the fetch.
 
 Because every context gets the jar, a session that navigates from any site to
@@ -108,28 +120,33 @@ Reddit/`looksBlocked` signatures where they generalize.
   face maps to `502` — instead of today's `200` with empty text. This fixes
   the root masking bug: the handler currently sets `error` to the browser's
   (empty) content, and `server.ts`'s truthiness check treats `""` as success.
-  The error message names the cause:
-  - domain has jar cookies → `"blocked by yelp.com's bot protection — its cookies in the cookie jar look stale; re-export them (see README)"`
-  - otherwise → `"blocked by yelp.com's bot protection (no content extracted)"`
+  The error message names the cause (as shipped; `<reason>` is the detected
+  `BlockReason`, e.g. `datadome`):
+  - block detected, domain has jar cookies → `"blocked by yelp.com's bot protection (<reason>) — its cookies in the cookie jar look stale; re-export them (see README)"`
+  - block detected, no jar cookies → `"blocked by yelp.com's bot protection (<reason>) — if the site works in a normal browser, export its cookies into the cookie jar (see README)"`
+  - no block detected but no text → `"no content extracted from yelp.com"`
+  - Over MCP, a `fetch_page` failure is returned with `isError: true`, keeping
+    the JSON result as its content.
 - **Sessions and MCP browse tools:** the `{ url, title, snapshot }` envelope
   gains an optional `blocked: { reason, hint }` field when the page after an
   operation is a detected bot wall, with the same stale-jar hint. The call
   still succeeds (the agent may want to look at the page), but it no longer
   has to guess from an iframe-only snapshot. Documented in `/openapi.json`.
 
-### 4. Export tool (`scripts/export-cookies.ts`, `npm run export-cookies`)
+### 4. Export tool (`src/export-cookies.ts`, `npm run export-cookies`)
 
 Run on the desktop where the site works in a normal browser:
 
 ```
 npm run export-cookies -- --domain yelp.com [--domain other.com] \
-  [--profile ~/.config/google-chrome/Default] [--out cookies.json]
+  [--profile ~/.config/google-chrome/Default] [--out cookies.json] [--secret-file FILE]
 ```
 
 - Copies Chrome's `Cookies` SQLite DB to a temp file (Chrome holds a lock) and
   reads it with `better-sqlite3` (already a dependency).
-- Gets the keyring secret via `secret-tool lookup application chrome`; falls
-  back to `--secret-file`, and to Chrome's basic-store key for `v10` values.
+- Gets the keyring secret from `--secret-file` if given, otherwise via
+  `secret-tool lookup application chrome`, and uses Chrome's basic-store key
+  for `v10` values.
 - Decrypts with `node:crypto`: PBKDF2-SHA1(secret, `saltysalt`, 1 iteration,
   16 bytes) → AES-128-CBC with a 16-space IV. For DB schema ≥ 24, verifies and
   strips the 32-byte `SHA256(host_key)` prefix — a mismatch means the wrong
