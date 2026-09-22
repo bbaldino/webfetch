@@ -1,6 +1,10 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { mkdtempSync, writeFileSync, readFileSync, rmSync, utimesSync } from 'node:fs'
+import { join } from 'node:path'
+import { tmpdir } from 'node:os'
 import type { Cookie } from 'playwright-core'
 import { BrowserManager } from './browser-manager.js'
+import { CookieJar } from './cookie-jar.js'
 
 const ck = (name: string, value = 'v'): Cookie => ({
   name,
@@ -35,8 +39,9 @@ function makeFakes(
       }
       events.push('inject')
       this.injected++
+      return new Map()
     },
-    merge(c: Cookie[]) {
+    mergeChanged(_seed: unknown, c: Cookie[]) {
       events.push('merge')
       this.merged.push(c)
     },
@@ -226,5 +231,65 @@ describe('BrowserManager cookie jar', () => {
     expect(browser.contexts[0].closed).toBe(true)
     expect(events).toEqual(['inject', 'ctx.close'])
     expect(jar.merged).toHaveLength(0)
+  })
+})
+
+/** A fake browser whose contexts really hold cookies: addCookies stores, cookies() returns. */
+function cookieBrowser() {
+  return {
+    isConnected: () => true,
+    close: async () => {},
+    newContext: async () => {
+      const store = new Map<string, Cookie>()
+      const key = (c: Cookie) => `${c.name}|${c.domain}|${c.path}`
+      return {
+        store,
+        set: (c: Cookie) => store.set(key(c), c),
+        addCookies: async (cs: Cookie[]) => cs.forEach((c) => store.set(key(c), c)),
+        cookies: async () => [...store.values()],
+        newPage: async () => ({ isClosed: () => false }),
+        close: async () => {},
+      }
+    },
+  }
+}
+
+describe('BrowserManager write-back against a real CookieJar', () => {
+  const future = Date.now() / 1000 + 86400
+  const dd = (value: string): Cookie => ({ ...ck('datadome', value), expires: future })
+  let dir: string
+  let path: string
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'bm-jar-'))
+    path = join(dir, 'cookies.json')
+  })
+  afterEach(() => rmSync(dir, { recursive: true, force: true }))
+  const onDisk = () => (JSON.parse(readFileSync(path, 'utf8')) as Cookie[])[0].value
+
+  it('a context closing after the jar was re-delivered does not revert it', async () => {
+    writeFileSync(path, JSON.stringify([dd('OLD')]))
+    const jar = new CookieJar(path, { debounceMs: 10_000 })
+    const bm = new BrowserManager({ jar, launch: async () => cookieBrowser() as never })
+    const a = await bm.createTempPage() // seeded with OLD
+    writeFileSync(path, JSON.stringify([dd('NEW')]))
+    const t = new Date(Date.now() + 5000)
+    utimesSync(path, t, t)
+    await bm.createTempPage() // hot-reloads NEW
+    await bm.closeContext(a.context)
+    await jar.flush()
+    expect(onDisk()).toBe('NEW')
+  })
+
+  it('a rotation in one context is not reverted by another closing later with its seed copy', async () => {
+    writeFileSync(path, JSON.stringify([dd('X')]))
+    const jar = new CookieJar(path, { debounceMs: 10_000 })
+    const bm = new BrowserManager({ jar, launch: async () => cookieBrowser() as never })
+    const a = await bm.createTempPage()
+    const b = await bm.createTempPage()
+    ;(b.context as unknown as { set: (c: Cookie) => void }).set(dd('Y')) // site rotates in B
+    await bm.closeContext(b.context)
+    await bm.closeContext(a.context)
+    await jar.flush()
+    expect(onDisk()).toBe('Y')
   })
 })

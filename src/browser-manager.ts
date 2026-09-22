@@ -1,6 +1,6 @@
 import { firefox, type Browser, type BrowserContext, type Page } from 'playwright-core'
 import { launchOptions } from 'camoufox-js'
-import type { CookieJar } from './cookie-jar.js'
+import type { CookieJar, CookieSeed } from './cookie-jar.js'
 
 export interface BrowserSession {
   context: BrowserContext
@@ -12,6 +12,8 @@ export class BrowserManager {
   private browser: Browser | null = null
   private sessions = new Map<string, BrowserSession>()
   private tempContexts = new Set<BrowserContext>()
+  // What each context was seeded with, so closeContext writes back only what it changed.
+  private seeds = new WeakMap<BrowserContext, CookieSeed>()
   private headless: boolean
   private jar: CookieJar | undefined
   private launchFn: (() => Promise<Browser>) | undefined
@@ -58,9 +60,13 @@ export class BrowserManager {
     const browser = await this.ensureBrowser()
     const context = await browser.newContext()
     // Seed every context with the cookie jar so bot-protected sites see a trusted visitor.
-    await this.jar
-      ?.inject(context)
-      .catch((err: Error) => console.error(`cookie jar inject failed: ${err.message}`))
+    if (this.jar) {
+      try {
+        this.seeds.set(context, await this.jar.inject(context))
+      } catch (err) {
+        console.error(`cookie jar inject failed: ${(err as Error).message}`)
+      }
+    }
     return context
   }
 
@@ -69,7 +75,8 @@ export class BrowserManager {
     this.tempContexts.delete(context)
     if (this.jar) {
       try {
-        this.jar.merge(await context.cookies())
+        const seed = this.seeds.get(context) ?? new Map()
+        this.jar.mergeChanged(seed, await context.cookies())
       } catch {
         /* best-effort: never fail a close over write-back */
       }

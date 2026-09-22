@@ -167,4 +167,68 @@ describe('CookieJar', () => {
     expect(domains).toContain('.yelp.com') // parent domain kept: related to www.yelp.com
     expect(domains).not.toContain('.other.com') // unrelated domain dropped
   })
+
+  describe('seed-diffed write-back (mergeChanged)', () => {
+    const fakeCtx = () => {
+      const added: Cookie[] = []
+      return { added, addCookies: async (c: readonly Cookie[]) => void added.push(...c) }
+    }
+
+    it('a late close does not revert a re-delivered jar (the C1 repro)', async () => {
+      writeFileSync(path, JSON.stringify([ck('datadome', '.yelp.com', 'OLD')]))
+      const jar = new CookieJar(path, { debounceMs: 10_000 })
+      const a = fakeCtx()
+      const seedA = await jar.inject(a) // context A opens with OLD
+      writeFileSync(path, JSON.stringify([ck('datadome', '.yelp.com', 'NEW')]))
+      bump(path)
+      await jar.inject(fakeCtx()) // next context hot-reloads NEW
+      jar.mergeChanged(seedA, a.added) // A closes with its unchanged seed copy
+      await jar.flush()
+      expect((JSON.parse(readFileSync(path, 'utf8')) as Cookie[])[0].value).toBe('NEW')
+    })
+
+    it("one context's rotation survives another closing later with an unchanged seed", async () => {
+      writeFileSync(path, JSON.stringify([ck('datadome', '.yelp.com', 'X')]))
+      const jar = new CookieJar(path, { debounceMs: 10_000 })
+      const a = fakeCtx()
+      const b = fakeCtx()
+      const seedA = await jar.inject(a)
+      const seedB = await jar.inject(b)
+      jar.mergeChanged(seedB, [ck('datadome', '.yelp.com', 'Y')]) // B rotated X -> Y
+      jar.mergeChanged(seedA, a.added) // A closes later, untouched
+      await jar.flush()
+      expect((JSON.parse(readFileSync(path, 'utf8')) as Cookie[])[0].value).toBe('Y')
+    })
+
+    it('an expiry-only refresh does not revert a value another context rotated', async () => {
+      writeFileSync(path, JSON.stringify([ck('datadome', '.yelp.com', 'X')]))
+      const jar = new CookieJar(path, { debounceMs: 10_000 })
+      const seedA = await jar.inject(fakeCtx())
+      const seedB = await jar.inject(fakeCtx())
+      jar.mergeChanged(seedB, [ck('datadome', '.yelp.com', 'Y')])
+      jar.mergeChanged(seedA, [ck('datadome', '.yelp.com', 'X', future + 3600)])
+      expect(jar.cookies()[0].value).toBe('Y')
+    })
+
+    it('writes back cookies the context rotated or added, and ignores sub-second expiry drift', async () => {
+      writeFileSync(
+        path,
+        JSON.stringify([
+          ck('datadome', '.yelp.com', 'X'),
+          ck('keep', '.yelp.com', 'k', future + 0.5),
+        ]),
+      )
+      const jar = new CookieJar(path, { debounceMs: 10_000 })
+      const seed = await jar.inject(fakeCtx())
+      jar.mergeChanged(seed, [
+        ck('datadome', '.yelp.com', 'Z'),
+        ck('keep', '.yelp.com', 'k', Math.round(future + 0.5)), // browser round-trip
+        ck('fresh', '.yelp.com', 'f'),
+      ])
+      const byName = Object.fromEntries(jar.cookies().map((c) => [c.name, c]))
+      expect(byName.datadome.value).toBe('Z')
+      expect(byName.fresh.value).toBe('f')
+      expect(byName.keep.expires).toBe(future + 0.5) // untouched: drift isn't a change
+    })
+  })
 })

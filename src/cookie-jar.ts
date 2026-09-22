@@ -10,6 +10,16 @@ const bare = (domain: string) => domain.replace(/^\./, '').toLowerCase()
 const cookieKey = (c: Cookie) => `${c.name}\u0000${c.domain.toLowerCase()}\u0000${c.path}`
 const live = (c: Cookie, now: number) => c.expires === -1 || c.expires > now
 
+/**
+ * What a context was seeded with: cookie key → the value and expiry injected. Handed back
+ * to mergeChanged() on close, so only cookies the context actually changed are written back.
+ */
+export type CookieSeed = ReadonlyMap<string, { value: string; expires: number }>
+
+// Browsers round-trip expiry at whole-second precision (the export has fractional seconds),
+// so a sub-second difference is drift, not a change.
+const sameExpiry = (a: number, b: number) => Math.abs(a - b) < 1
+
 // True when d and j are the same site or one is a parent domain of the other — either
 // direction, since an incoming rotated cookie may be scoped narrower or wider than
 // whatever's already in the jar for that site.
@@ -71,9 +81,31 @@ export class CookieJar {
     return false
   }
 
-  async inject(context: Pick<BrowserContext, 'addCookies'>): Promise<void> {
-    const cookies = this.cookies()
-    if (cookies.length > 0) await context.addCookies(cookies.map(sanitize))
+  /** Seed a context with the jar; returns what was injected, for mergeChanged() on close. */
+  async inject(context: Pick<BrowserContext, 'addCookies'>): Promise<CookieSeed> {
+    const cookies = this.cookies().map(sanitize)
+    if (cookies.length > 0) await context.addCookies(cookies)
+    return new Map(cookies.map((c) => [cookieKey(c), { value: c.value, expires: c.expires }]))
+  }
+
+  /**
+   * Write back only what a context changed relative to its seed. Its unchanged seed copy
+   * of every jar cookie is dropped, so a context closing late can't revert a rotation made
+   * by another context or a jar re-delivered since it opened.
+   */
+  mergeChanged(seed: CookieSeed, fromContext: Cookie[]): void {
+    this.reloadIfChanged()
+    const current = new Map(this.jar.map((c) => [cookieKey(c), c]))
+    const changed = fromContext.filter((c) => {
+      const s = seed.get(cookieKey(c))
+      if (!s) return true // new in this context
+      if (c.value !== s.value) return true // rotated in this context
+      if (sameExpiry(c.expires, s.expires)) return false // untouched seed copy
+      // Same value, refreshed expiry: only worth keeping if the jar still holds that value —
+      // otherwise another context (or a re-delivery) has already moved the jar past it.
+      return current.get(cookieKey(c))?.value === s.value
+    })
+    this.merge(changed)
   }
 
   merge(fromContext: Cookie[]): void {
