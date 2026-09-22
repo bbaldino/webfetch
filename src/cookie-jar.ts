@@ -22,7 +22,9 @@ const sameExpiry = (a: number, b: number) => Math.abs(a - b) < 1
 
 // True when d and j are the same site or one is a parent domain of the other — either
 // direction, since an incoming rotated cookie may be scoped narrower or wider than
-// whatever's already in the jar for that site.
+// whatever's already in the jar for that site. It would also call a public suffix ("com")
+// related to "yelp.com"; that's accepted because browsers never set or report cookies on a
+// public suffix, and jar domains come from real browser exports.
 const related = (d: string, j: string) => d === j || d.endsWith(`.${j}`) || j.endsWith(`.${d}`)
 
 // Playwright's own ceiling for a cookie expiry (year 9999).
@@ -70,6 +72,7 @@ function normalize(raw: unknown): Cookie | undefined {
 export class CookieJar {
   private jar: Cookie[] = []
   private mtimeMs = -1
+  private badMtime = -1 // mtime of the last unparseable read, to log it only once
   private dirty = false
   private version = 0
   private timer: ReturnType<typeof setTimeout> | undefined
@@ -102,9 +105,17 @@ export class CookieJar {
         console.error(`cookie jar ${this.path}: skipped ${dropped} invalid cookie entries`)
       }
       this.jar = valid
+      this.badMtime = -1
     } catch (err) {
-      console.error(`cookie jar ${this.path}: ignoring malformed file (${(err as Error).name})`)
-      this.jar = []
+      // Most likely an in-place copy caught half-written. Keep the previous jar rather than
+      // emptying it, and don't cache this mtime: on coarse-timestamp filesystems the finished
+      // copy can share it, so the next call must re-read regardless. (While mtimeMs is -1 the
+      // write-back mtime guard also refuses to write over the file.)
+      this.mtimeMs = -1
+      if (mtime !== this.badMtime) {
+        console.error(`cookie jar ${this.path}: ignoring malformed file (${(err as Error).name})`)
+      }
+      this.badMtime = mtime
     }
   }
 
@@ -118,9 +129,11 @@ export class CookieJar {
     return new Set(this.cookies().map((c) => bare(c.domain)))
   }
 
+  // Uses the same bidirectional `related` test as merge(), so a jar holding only host-only
+  // www.yelp.com cookies still covers a block on yelp.com.
   covers(host: string): boolean {
-    const h = host.toLowerCase()
-    for (const d of this.domains()) if (h === d || h.endsWith(`.${d}`)) return true
+    const h = bare(host)
+    for (const d of this.domains()) if (related(h, d)) return true
     return false
   }
 
@@ -185,7 +198,13 @@ export class CookieJar {
     })
     if (covered.length === 0) return
     const byKey = new Map(this.jar.map((c) => [cookieKey(c), c]))
-    for (const c of covered) byKey.set(cookieKey(c), c)
+    for (const c of covered) {
+      // Session cookies (expires -1) never expire in the jar, so persisting new ones would
+      // turn them into permanent cookies that pile up across restarts; only update those
+      // the jar already had.
+      if (c.expires === -1 && !byKey.has(cookieKey(c))) continue
+      byKey.set(cookieKey(c), c)
+    }
     const next = [...byKey.values()].filter((c) => live(c, now))
     if (JSON.stringify(next) === JSON.stringify(this.jar)) return
     this.jar = next
@@ -228,9 +247,10 @@ export class CookieJar {
     const tmp = `${this.path}.${process.pid}.tmp`
     await fsp.writeFile(tmp, snapshot, { mode: 0o600 })
     // Accepted race: an external copy landing between the mtime check above and this
-    // rename would still be overwritten by ours. Closing that fully needs file locking,
-    // which isn't worth it for a cookie jar — the hot-reload path picks up their copy on
-    // the very next read anyway.
+    // rename is lost. With the documented in-place `cat >` delivery, our rename swaps in a
+    // new inode while cat is still writing to the old, now-unlinked one, so their copy is
+    // gone, not picked up later: the user has to copy it in again. Closing this fully
+    // needs file locking, which isn't worth it for a cookie jar.
     await fsp.rename(tmp, this.path)
     this.mtimeMs = (await fsp.stat(this.path)).mtimeMs
     // Only clear dirty if nothing changed the jar while we were writing; otherwise the

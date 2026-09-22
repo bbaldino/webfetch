@@ -23,7 +23,12 @@ const ck = (name: string, value = 'v'): Cookie => ({
  * flush before browser.close), not just that they happened.
  */
 function makeFakes(
-  opts: { failInject?: boolean; failCookies?: boolean; failNewPage?: boolean } = {},
+  opts: {
+    failInject?: boolean
+    failCookies?: boolean
+    failNewPage?: boolean
+    cookiesGate?: Promise<void>
+  } = {},
 ) {
   const events: string[] = []
   const injectedContexts: unknown[] = []
@@ -63,6 +68,7 @@ function makeFakes(
         closed: false,
         // A real BrowserContext.cookies() throws once the context is closed.
         cookies: async () => {
+          if (opts.cookiesGate) await opts.cookiesGate
           if (ctx.closed) throw new Error('cookies: context is closed')
           if (opts.failCookies) throw new Error('cookies failed')
           return [ck('datadome', 'rotated')]
@@ -93,6 +99,19 @@ function makeFakes(
 }
 
 describe('BrowserManager cookie jar', () => {
+  it('a closeContext whose merge lands after shutdown flushed gets flushed too', async () => {
+    let release: () => void = () => {}
+    const cookiesGate = new Promise<void>((r) => (release = r))
+    const { events, jar, browser } = makeFakes({ cookiesGate })
+    const bm = new BrowserManager({ jar: jar as never, launch: async () => browser as never })
+    const { context } = await bm.createTempPage()
+    const late = bm.closeContext(context) // e.g. browserFetch's finally, stalled in cookies()
+    await bm.close() // shutdown flushes while that merge is still pending
+    release()
+    await late
+    expect(events).toEqual(['inject', 'flush', 'browser.close', 'merge', 'flush', 'ctx.close'])
+  })
+
   it('injects the jar into session and temp contexts, passing the context it created', async () => {
     const { jar, browser, injectedContexts } = makeFakes()
     const bm = new BrowserManager({ jar: jar as never, launch: async () => browser as never })

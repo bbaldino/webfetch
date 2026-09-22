@@ -18,6 +18,7 @@ export class BrowserManager {
   private jar: CookieJar | undefined
   private launchFn: (() => Promise<Browser>) | undefined
   private closePromise: Promise<void> | undefined
+  private shutdownFlushed = false
 
   constructor(opts: { headless?: boolean; jar?: CookieJar; launch?: () => Promise<Browser> } = {}) {
     this.headless = opts.headless ?? true
@@ -79,6 +80,9 @@ export class BrowserManager {
       try {
         const seed = this.seeds.get(context) ?? new Map()
         this.jar.mergeChanged(seed, await context.cookies())
+        // Shutdown has already flushed: flush this late merge ourselves, or its debounce
+        // timer (unref'd) never fires before the process exits.
+        if (this.shutdownFlushed) await this.jar.flush()
       } catch {
         /* best-effort: never fail a close over write-back */
       }
@@ -165,6 +169,7 @@ export class BrowserManager {
       await this.closeContext(context)
     }
     await this.jar?.flush()
+    this.shutdownFlushed = true
     if (this.browser) {
       try {
         await this.browser.close()

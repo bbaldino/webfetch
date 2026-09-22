@@ -298,4 +298,40 @@ describe('CookieJar', () => {
       warn.mockRestore()
     })
   })
+
+  it('a parse failure keeps the previous jar and retries on the next call, even at the same mtime', () => {
+    writeFileSync(path, JSON.stringify([ck('a', '.yelp.com')]))
+    const jar = new CookieJar(path)
+    expect(jar.cookies().map((c) => c.name)).toEqual(['a'])
+    const warn = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const t = new Date(Date.now() + 5000)
+    writeFileSync(path, '[{"name":') // a half-written in-place copy
+    utimesSync(path, t, t)
+    expect(jar.cookies().map((c) => c.name)).toEqual(['a']) // previous jar kept
+    writeFileSync(path, JSON.stringify([ck('b', '.yelp.com')]))
+    utimesSync(path, t, t) // coarse timestamps: the finished copy shares the partial's mtime
+    expect(jar.cookies().map((c) => c.name)).toEqual(['b'])
+    warn.mockRestore()
+  })
+
+  it('write-back does not persist new session cookies, but updates ones already in the jar', () => {
+    writeFileSync(
+      path,
+      JSON.stringify([ck('datadome', '.yelp.com'), ck('s', '.yelp.com', 'v', -1)]),
+    )
+    const jar = new CookieJar(path, { debounceMs: 10_000 })
+    jar.cookies()
+    jar.merge([ck('sess', '.yelp.com', 'x', -1), ck('s', '.yelp.com', 'rotated', -1)])
+    const byName = Object.fromEntries(jar.cookies().map((c) => [c.name, c.value]))
+    expect(byName).toEqual({ datadome: 'v', s: 'rotated' })
+  })
+
+  it('covers() is bidirectional like merge: a host-only www cookie covers the bare domain', () => {
+    writeFileSync(path, JSON.stringify([ck('a', 'www.yelp.com')]))
+    const jar = new CookieJar(path)
+    expect(jar.covers('www.yelp.com')).toBe(true)
+    expect(jar.covers('yelp.com')).toBe(true)
+    expect(jar.covers('api.www.yelp.com')).toBe(true)
+    expect(jar.covers('notyelp.com')).toBe(false)
+  })
 })
