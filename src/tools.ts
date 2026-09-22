@@ -163,6 +163,13 @@ const waitForParam = z
   .describe('Wait until an element by role+name, or text, appears.')
 
 export function createTools(browserManager: BrowserManager, domainDb: DomainDb): ToolDeclaration[] {
+  // Shared by every browse_* tool handler below: run `fn` against this ctx's
+  // browser session, opening the session lazily on first use.
+  const makeRun =
+    (ctx: { agentName?: string; channelId?: string }) =>
+    async <T>(fn: (p: Page) => Promise<T>): Promise<T> =>
+      fn((await browserManager.getSession(getRunId(ctx))).page)
+
   return [
     defineTool({
       name: 'fetch_page',
@@ -263,8 +270,7 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         timeout_ms: z.number().optional().describe('Max time to wait, in milliseconds'),
       }),
       async handler(params, ctx) {
-        const run = async <T>(fn: (p: Page) => Promise<T>) =>
-          fn((await browserManager.getSession(getRunId(ctx))).page)
+        const run = makeRun(ctx)
         return callBrowseTool('browse_navigate', params as Record<string, unknown>, run)
       },
     }),
@@ -276,8 +282,7 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         'showing interactive elements with their role and name.',
       params: z.object({}),
       async handler(_params, ctx) {
-        const run = async <T>(fn: (p: Page) => Promise<T>) =>
-          fn((await browserManager.getSession(getRunId(ctx))).page)
+        const run = makeRun(ctx)
         return callBrowseTool('browse_snapshot', {}, run)
       },
     }),
@@ -292,8 +297,7 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         name: z.string().describe('Accessible name of the element'),
       }),
       async handler(params, ctx) {
-        const run = async <T>(fn: (p: Page) => Promise<T>) =>
-          fn((await browserManager.getSession(getRunId(ctx))).page)
+        const run = makeRun(ctx)
         return callBrowseTool('browse_click', params as Record<string, unknown>, run)
       },
     }),
@@ -312,8 +316,7 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         submit: z.boolean().optional().describe('Press Enter after typing (default: false)'),
       }),
       async handler(params, ctx) {
-        const run = async <T>(fn: (p: Page) => Promise<T>) =>
-          fn((await browserManager.getSession(getRunId(ctx))).page)
+        const run = makeRun(ctx)
         return callBrowseTool('browse_type', params as Record<string, unknown>, run)
       },
     }),
@@ -325,8 +328,7 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         key: z.string().describe('The key to press'),
       }),
       async handler(params, ctx) {
-        const run = async <T>(fn: (p: Page) => Promise<T>) =>
-          fn((await browserManager.getSession(getRunId(ctx))).page)
+        const run = makeRun(ctx)
         return callBrowseTool('browse_press_key', params as Record<string, unknown>, run)
       },
     }),
@@ -340,8 +342,7 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         values: z.array(z.string()).describe('Values to select'),
       }),
       async handler(params, ctx) {
-        const run = async <T>(fn: (p: Page) => Promise<T>) =>
-          fn((await browserManager.getSession(getRunId(ctx))).page)
+        const run = makeRun(ctx)
         return callBrowseTool('browse_select_option', params as Record<string, unknown>, run)
       },
     }),
@@ -351,8 +352,7 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
       description: 'Navigate back to the previous page.',
       params: z.object({}),
       async handler(_params, ctx) {
-        const run = async <T>(fn: (p: Page) => Promise<T>) =>
-          fn((await browserManager.getSession(getRunId(ctx))).page)
+        const run = makeRun(ctx)
         return callBrowseTool('browse_go_back', {}, run)
       },
     }),
@@ -365,8 +365,7 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         amount: z.number().optional().describe('Pixels to scroll (default: 500)'),
       }),
       async handler(params, ctx) {
-        const run = async <T>(fn: (p: Page) => Promise<T>) =>
-          fn((await browserManager.getSession(getRunId(ctx))).page)
+        const run = makeRun(ctx)
         return callBrowseTool('browse_scroll', params as Record<string, unknown>, run)
       },
     }),
@@ -384,8 +383,7 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         timeout_ms: z.number().optional().describe('Max time to wait, in milliseconds'),
       }),
       async handler(params, ctx) {
-        const run = async <T>(fn: (p: Page) => Promise<T>) =>
-          fn((await browserManager.getSession(getRunId(ctx))).page)
+        const run = makeRun(ctx)
         return callBrowseTool('browse_wait', params as Record<string, unknown>, run)
       },
     }),

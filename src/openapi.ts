@@ -290,6 +290,28 @@ export const openapiSpec = {
           '200': { description: 'JSON-RPC response or event stream, per the MCP spec.' },
         },
       },
+      get: {
+        operationId: 'mcpStream',
+        summary: 'Open the MCP server-to-client SSE stream for an initialized session',
+        description:
+          'Streamable HTTP transport: with an `Mcp-Session-Id` header from a prior `initialize`, ' +
+          'opens a `text/event-stream` the server can push unsolicited JSON-RPC messages on.',
+        tags: ['mcp'],
+        responses: {
+          '200': { description: 'text/event-stream of JSON-RPC messages, per the MCP spec.' },
+        },
+      },
+      delete: {
+        operationId: 'mcpTerminate',
+        summary: 'Terminate an MCP session',
+        description:
+          'Streamable HTTP transport: with an `Mcp-Session-Id` header, closes that session ' +
+          '(and its browse session, if one was opened) and frees the transport.',
+        tags: ['mcp'],
+        responses: {
+          '200': { description: 'Session terminated.' },
+        },
+      },
     },
   },
   components: {

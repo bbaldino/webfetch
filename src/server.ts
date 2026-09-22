@@ -19,8 +19,9 @@ import { BrowserManager } from './browser-manager.js'
 import { DomainDb } from './domain-db.js'
 import { createTools } from './tools.js'
 import { SessionManager } from './session-manager.js'
-import { createRouter } from './routes.js'
+import { createRouter, type FetchPageHandler } from './routes.js'
 import { McpFace, parseAllowedHosts } from './mcp-http.js'
+import type { ToolContext } from './core-compat.js'
 
 const port = Number(process.env.PORT ?? 9000)
 const headless = process.env.WEBFETCH_HEADLESS !== 'false'
@@ -53,7 +54,8 @@ const mcp = new McpFace({ sessions, fetchPage, toolDeclarations: tools, allowedH
 
 const server = http.createServer(
   createRouter({
-    fetchPage: (args, ctx) => fetchPage.handler(args, ctx as never) as never,
+    fetchPage: (args, ctx) =>
+      fetchPage.handler(args, ctx as ToolContext) as ReturnType<FetchPageHandler>,
     sessions,
     mcp,
   }),

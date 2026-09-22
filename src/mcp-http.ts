@@ -16,7 +16,7 @@ import { isInitializeRequest } from '@modelcontextprotocol/sdk/types.js'
 import { createMcpServer, type ToolCaller } from './mcp-server.js'
 import { callBrowseTool, BROWSE_TOOL_OPS } from './browse-tools.js'
 import { SessionNotFound, type SessionManager } from './session-manager.js'
-import type { ToolDeclaration } from './core-compat.js'
+import type { ToolContext, ToolDeclaration } from './core-compat.js'
 
 interface Entry {
   transport: StreamableHTTPServerTransport
@@ -64,6 +64,11 @@ export class McpFace {
   // Browse (browser) session id per MCP client session — owned separately so
   // makeCallTool/runBrowse work standalone, without a live transport entry.
   private browseSessions = new Map<string, string>()
+  // In-flight session.create() per MCP client session, so concurrent
+  // browse_* calls that arrive before the first create() resolves all await
+  // the SAME create() instead of each creating (and orphaning) their own
+  // session against the cap. See ensureBrowseId.
+  private creating = new Map<string, Promise<string>>()
 
   constructor(private deps: McpFaceDeps) {}
 
@@ -71,16 +76,40 @@ export class McpFace {
   makeCallTool(mcpSessionId: string): ToolCaller {
     return async (name, args) => {
       if (name === 'fetch_page') {
-        return this.deps.fetchPage.handler(args, {
-          credentials: {},
-          fetch: globalThis.fetch,
-        } as never)
+        const ctx: ToolContext = { credentials: {}, fetch: globalThis.fetch }
+        return this.deps.fetchPage.handler(args, ctx)
       }
       if (name in BROWSE_TOOL_OPS) {
         return callBrowseTool(name, args, (fn) => this.runBrowse(mcpSessionId, fn))
       }
       throw new Error(`unknown tool: ${name}`)
     }
+  }
+
+  /**
+   * Resolve this client's browse session id, creating it lazily on first use.
+   * Memoizes the in-flight `create()` per `mcpSessionId` so concurrent callers
+   * (e.g. two `browse_*` calls that both arrive before the first `create()`
+   * resolves) await the same creation instead of each racing their own —
+   * which would orphan one against the session cap. The pending entry is
+   * cleared once the create settles (success or failure), so a later call —
+   * including a post-`SessionNotFound` retry — starts a fresh create().
+   */
+  private async ensureBrowseId(mcpSessionId: string): Promise<string> {
+    const existing = this.browseSessions.get(mcpSessionId)
+    if (existing) return existing
+    let pending = this.creating.get(mcpSessionId)
+    if (!pending) {
+      pending = this.deps.sessions
+        .create()
+        .then(({ id }) => {
+          this.browseSessions.set(mcpSessionId, id)
+          return id
+        })
+        .finally(() => this.creating.delete(mcpSessionId))
+      this.creating.set(mcpSessionId, pending)
+    }
+    return pending
   }
 
   /**
@@ -91,21 +120,13 @@ export class McpFace {
    * result).
    */
   private async runBrowse<T>(mcpSessionId: string, fn: (page: Page) => Promise<T>): Promise<T> {
-    const ensureBrowseId = async (): Promise<string> => {
-      const existing = this.browseSessions.get(mcpSessionId)
-      if (existing) return existing
-      const { id } = await this.deps.sessions.create()
-      this.browseSessions.set(mcpSessionId, id)
-      return id
-    }
-
-    const id = await ensureBrowseId()
+    const id = await this.ensureBrowseId(mcpSessionId)
     try {
       return await this.deps.sessions.run(id, fn)
     } catch (err) {
       if (err instanceof SessionNotFound) {
         this.browseSessions.delete(mcpSessionId)
-        const retryId = await ensureBrowseId()
+        const retryId = await this.ensureBrowseId(mcpSessionId)
         return this.deps.sessions.run(retryId, fn)
       }
       throw err
@@ -123,8 +144,10 @@ export class McpFace {
    * Streamable HTTP transport lifecycle. On an initialize POST (no
    * `Mcp-Session-Id` header, body is an initialize request) create a fresh
    * transport+server pair; otherwise dispatch to the existing transport for the
-   * given session id. Unknown/missing session id on a non-initialize request
-   * gets a JSON 404 (matches the transport's own "unknown session" shape).
+   * given session id. A missing session id on a non-initialize request is a
+   * malformed request and gets a JSON 400; an unknown (never-issued or already
+   * closed) session id gets a JSON 404 (matches the transport's own "unknown
+   * session" shape).
    */
   async handle(req: http.IncomingMessage, res: http.ServerResponse, body?: unknown): Promise<void> {
     const sessionIdHeader = req.headers['mcp-session-id']
@@ -135,7 +158,7 @@ export class McpFace {
         await this.initializeSession(req, res, body)
         return
       }
-      json(res, 404, { error: 'missing Mcp-Session-Id header' })
+      json(res, 400, { error: 'missing Mcp-Session-Id header' })
       return
     }
 

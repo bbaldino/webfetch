@@ -10,7 +10,7 @@
 // (`console.error`) — never `console.log`/stdout — or it corrupts the protocol.
 import Database from 'better-sqlite3'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
-import { runMigrations } from './core-compat.js'
+import { runMigrations, type ToolContext } from './core-compat.js'
 import { BrowserManager } from './browser-manager.js'
 import { DomainDb } from './domain-db.js'
 import { createTools } from './tools.js'
@@ -42,11 +42,11 @@ const server = createMcpServer({
     if (!tool) {
       throw new Error(`unknown tool: ${name}`)
     }
-    const ctx = {
+    const ctx: ToolContext = {
       credentials: {},
       fetch: globalThis.fetch,
     }
-    return tool.handler(args, ctx as never)
+    return tool.handler(args, ctx)
   },
 })
 

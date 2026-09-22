@@ -86,6 +86,35 @@ describe('McpFace.makeCallTool', () => {
     expect(sessions.createCalls).toBe(2)
   })
 
+  it('memoizes a concurrent first-create race so only one browse session is created', async () => {
+    let resolveCreate!: (v: { id: string; expiresInMs: number }) => void
+    const deferred = new Promise<{ id: string; expiresInMs: number }>((resolve) => {
+      resolveCreate = resolve
+    })
+    const sessions = stubSessions({
+      async create() {
+        this.createCalls++
+        return deferred
+      },
+    })
+    const face = new McpFace({
+      sessions: sessions as never,
+      fetchPage,
+      toolDeclarations: [fetchPage],
+    })
+    const call = face.makeCallTool('m1')
+    // Two browse_* calls for the same MCP client session, fired before the
+    // first create() resolves — both must await the SAME create(), not each
+    // create (and orphan) their own session against the cap.
+    const p1 = call('browse_navigate', { url: 'https://e' })
+    const p2 = call('browse_snapshot', {})
+    resolveCreate({ id: 'bs-1', expiresInMs: 1000 })
+    const [r1, r2] = await Promise.all([p1, p2])
+    expect(sessions.createCalls).toBe(1)
+    expect(r1).toBeTruthy()
+    expect(r2).toBeTruthy()
+  })
+
   it('propagates SessionCapReached', async () => {
     const sessions = stubSessions({
       async create() {

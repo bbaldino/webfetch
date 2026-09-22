@@ -32,7 +32,8 @@ export function createMcpServer(opts: {
       const text = typeof result === 'string' ? result : JSON.stringify(result)
       return { content: [{ type: 'text', text }] }
     } catch (err) {
-      return { content: [{ type: 'text', text: (err as Error).message }], isError: true }
+      const message = err instanceof Error ? err.message : String(err)
+      return { content: [{ type: 'text', text: message }], isError: true }
     }
   })
 
