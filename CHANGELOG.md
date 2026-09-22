@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/bbaldino/webfetch/compare/v0.5.0...v0.6.0) (2026-09-22)
+
+
+### Features
+
+* export-cookies reads Firefox profiles; refuse empty exports ([3887dfb](https://github.com/bbaldino/webfetch/commit/3887dfb71945e346b907ed9ed5b4a1919fc1ea01))
+
 ## [0.5.0](https://github.com/bbaldino/webfetch/compare/v0.4.0...v0.5.0) (2026-09-22)
 
 
