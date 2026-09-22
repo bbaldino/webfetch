@@ -5,6 +5,8 @@ import type http from 'node:http'
 import * as browse from './browse.js'
 import { SessionCapReached, SessionNotFound, type SessionManager } from './session-manager.js'
 import { openapiSpec } from './openapi.js'
+import { validateWaitFor, BrowseArgError } from './browse-tools.js'
+import type { McpFace } from './mcp-http.js'
 
 export type FetchPageHandler = (
   args: { url: string },
@@ -14,6 +16,7 @@ export type FetchPageHandler = (
 export interface RouterDeps {
   fetchPage: FetchPageHandler
   sessions: SessionManager
+  mcp: McpFace
 }
 
 function readBody(req: http.IncomingMessage): Promise<string> {
@@ -114,6 +117,23 @@ export function createRouter(deps: RouterDeps) {
         }
       }
 
+      // The networked MCP endpoint (Streamable HTTP transport) — McpFace owns the
+      // transport lifecycle and writes the response itself; we just parse the body
+      // for POST (initialize + subsequent client messages) and delegate.
+      if (pathname === '/mcp') {
+        let body: unknown
+        if (req.method === 'POST') {
+          try {
+            body = JSON.parse((await readBody(req)) || '{}')
+          } catch {
+            json(res, 400, { error: 'invalid JSON body' })
+            return
+          }
+        }
+        await deps.mcp.handle(req, res, body)
+        return
+      }
+
       // A bare/wrong route is almost always a client misconfig (e.g. a base URL
       // set to the host with no `/fetch` path, so requests land on `/`). Say what
       // the valid routes are instead of a blank "not found".
@@ -137,28 +157,6 @@ function needValues(body: Record<string, unknown>): string[] {
   const v = body.values
   if (!Array.isArray(v) || v.length === 0) throw new BadRequest('"values" array is required')
   return v as string[]
-}
-
-// Shared shape validation for `wait_for`, used both where it's required (the
-// `wait` op) and where it's optional (the `navigate` op's inline wait). If a
-// `text` key is present it must be a non-empty string — this matches
-// browse.applyWait's `'text' in wait` check, which would otherwise take the
-// (broken) empty-text branch instead of falling through to role/name.
-function validateWaitFor(wf: unknown): browse.WaitFor {
-  if (!wf || typeof wf !== 'object') {
-    throw new BadRequest('"wait_for" must be {text} or {role,name}')
-  }
-  const w = wf as { text?: unknown; role?: unknown; name?: unknown }
-  if ('text' in w) {
-    if (typeof w.text !== 'string' || w.text.length === 0) {
-      throw new BadRequest('"wait_for.text" must be a non-empty string')
-    }
-    return { text: w.text }
-  }
-  if (typeof w.role !== 'string' || w.role.length === 0 || typeof w.name !== 'string') {
-    throw new BadRequest('"wait_for" must be {text} or {role,name}')
-  }
-  return { role: w.role, name: w.name }
 }
 
 function needWaitFor(body: Record<string, unknown>): browse.WaitFor {
@@ -248,7 +246,11 @@ function mapError(res: http.ServerResponse, err: unknown): void {
     json(res, 429, { error: err.message, hint: 'close a session or retry' })
   } else if (err instanceof SessionNotFound) {
     json(res, 404, { error: err.message, hint: 'create a new session' })
-  } else if (err instanceof browse.InvalidRoleError || err instanceof BadRequest) {
+  } else if (
+    err instanceof browse.InvalidRoleError ||
+    err instanceof BadRequest ||
+    err instanceof BrowseArgError
+  ) {
     json(res, 400, { error: (err as Error).message })
   } else {
     json(res, 502, { error: (err as Error).message })

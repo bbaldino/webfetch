@@ -95,6 +95,31 @@ The whole REST surface (this plus `/fetch` and `/health`) is described by an Ope
 document the service serves at `GET /openapi.json`, so a client or agent can discover it at
 runtime.
 
+## MCP
+
+The same server also speaks MCP directly, over the network, at:
+
+```
+http://webfetch.home/mcp
+```
+
+This is the [MCP Streamable HTTP transport](https://modelcontextprotocol.io) — JSON-RPC 2.0
+over POST, with an `Mcp-Session-Id` header identifying the client after `initialize` — not a
+plain REST resource. `GET /openapi.json` lists `/mcp` too, but only as a pointer: use an MCP
+SDK client (`Client` + `StreamableHTTPClientTransport` from `@modelcontextprotocol/sdk`) rather
+than calling it directly.
+
+It's the same tool set as the stdio `standalone.ts` server described above — `fetch_page` plus
+the full `browse_*` surface (`browse_navigate`, `browse_snapshot`, `browse_click`, `browse_type`,
+`browse_scroll`, `browse_go_back`, `browse_select_option`, `browse_press_key`, `browse_wait`) — just reachable
+over the network instead of stdio. Each connected MCP client gets its own capped browser session
+(`browse_*` calls create it lazily on first use), governed by the same `WEBFETCH_MAX_SESSIONS`
+and `WEBFETCH_SESSION_TTL_MS` env vars as `/sessions`.
+
+By default the endpoint only accepts requests whose `Host` header matches the LAN hostnames it's
+normally reached at (DNS-rebinding protection); see `WEBFETCH_MCP_ALLOWED_HOSTS` and
+`WEBFETCH_MCP_DNS_REBINDING` in [Configuration](#configuration) if it sits behind a reverse proxy.
+
 ## Run
 
 ```sh
@@ -109,6 +134,7 @@ npm test              # unit tests (reddit parsing / block detection / routes / 
 
 npm run test:integration          # live Reddit fetches (needs network; REDDIT_INTEGRATION=1)
 npm run test:integration:browse   # live session API against a real Camoufox (BROWSE_INTEGRATION=1)
+npm run test:integration:mcp      # live /mcp endpoint against a real Camoufox (MCP_INTEGRATION=1)
 ```
 
 ### Docker
@@ -125,10 +151,12 @@ need a tweak on a first real build.
 
 ## Configuration
 
-| Env var                   | Default    | Meaning                                                             |
-| ------------------------- | ---------- | ------------------------------------------------------------------- |
-| `PORT`                    | `9000`     | REST listen port.                                                   |
-| `WEBFETCH_DB`             | `:memory:` | SQLite path for the per-domain method-learning store.               |
-| `WEBFETCH_HEADLESS`       | `true`     | Set `false` to launch Camoufox headed (local debugging).            |
-| `WEBFETCH_MAX_SESSIONS`   | `3`        | Max concurrent `/sessions`; `POST /sessions` past the cap is `429`. |
-| `WEBFETCH_SESSION_TTL_MS` | `300000`   | Idle timeout (ms) for a session; each op resets the timer.          |
+| Env var                      | Default       | Meaning                                                                         |
+| ---------------------------- | ------------- | ------------------------------------------------------------------------------- |
+| `PORT`                       | `9000`        | REST listen port.                                                               |
+| `WEBFETCH_DB`                | `:memory:`    | SQLite path for the per-domain method-learning store.                           |
+| `WEBFETCH_HEADLESS`          | `true`        | Set `false` to launch Camoufox headed (local debugging).                        |
+| `WEBFETCH_MAX_SESSIONS`      | `3`           | Max concurrent `/sessions`; `POST /sessions` past the cap is `429`.             |
+| `WEBFETCH_SESSION_TTL_MS`    | `300000`      | Idle timeout (ms) for a session; each op resets the timer.                      |
+| `WEBFETCH_MCP_ALLOWED_HOSTS` | LAN hostnames | Comma-separated `Host` values `/mcp` accepts (DNS-rebinding protection).        |
+| `WEBFETCH_MCP_DNS_REBINDING` | `true`        | Set `false`/`0` to disable the `/mcp` Host check (e.g. behind a reverse proxy). |
