@@ -59,15 +59,23 @@ try {
 
 let existing: Cookie[] = []
 if (existsSync(values.out)) {
+  let parsed: unknown
   try {
-    existing = JSON.parse(readFileSync(values.out, 'utf8'))
+    parsed = JSON.parse(readFileSync(values.out, 'utf8'))
   } catch {
     console.error(`existing cookie jar ${values.out} is not valid JSON`)
     process.exit(1)
   }
+  if (!Array.isArray(parsed)) {
+    console.error(`existing cookie jar ${values.out} is not a JSON array of cookies`)
+    process.exit(1)
+  }
+  existing = parsed as Cookie[]
+  // Tighten an existing file before writing, so the cookies never sit at a looser mode
+  // (writeFileSync's `mode` only applies when it creates the file).
+  chmodSync(values.out, 0o600)
 }
 writeFileSync(values.out, JSON.stringify(mergeJar(existing, fresh, domains)), { mode: 0o600 })
-chmodSync(values.out, 0o600)
 
 for (const d of domains) {
   console.log(`${d}: ${fresh.filter((c) => matchesDomain(c.domain, d)).length} cookies`)
