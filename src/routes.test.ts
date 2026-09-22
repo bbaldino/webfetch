@@ -1,8 +1,16 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import http from 'node:http'
+import Database from 'better-sqlite3'
+import { Client } from '@modelcontextprotocol/sdk/client/index.js'
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { createRouter, type RouterDeps } from './routes.js'
 import { SessionCapReached, SessionNotFound } from './session-manager.js'
 import { SESSION_OPS } from './openapi.js'
+import { McpFace } from './mcp-http.js'
+import { createTools } from './tools.js'
+import { BrowserManager } from './browser-manager.js'
+import { DomainDb } from './domain-db.js'
+import { runMigrations } from './core-compat.js'
 
 let server: http.Server | undefined
 afterEach(() => server?.close())
@@ -17,6 +25,7 @@ async function start(deps: RouterDeps): Promise<string> {
 const stubDeps = (): RouterDeps => ({
   fetchPage: async ({ url }) => ({ url, method: 'stub', title: 'T', content: 'C' }),
   sessions: {} as never,
+  mcp: {} as never,
 })
 
 describe('createRouter', () => {
@@ -220,6 +229,7 @@ describe('GET /openapi.json', () => {
     const base = await start({
       fetchPage: async () => ({ url: '', method: '' }),
       sessions: sessionStub() as never,
+      mcp: {} as never,
     })
     for (const op of SESSION_OPS) {
       const res = await fetch(`${base}/sessions/sess-1/${op}`, {
@@ -229,6 +239,46 @@ describe('GET /openapi.json', () => {
       })
       const body = (await res.json().catch(() => ({}))) as { error?: string }
       expect(body.error ?? '').not.toContain('unknown operation')
+    }
+  })
+})
+
+describe('MCP /mcp handshake', () => {
+  it('initializes and lists tools including browse_wait and fetch_page', async () => {
+    // Real tool declarations, the lightest way to get them: constructing a
+    // BrowserManager does NOT launch a browser (that only happens lazily on
+    // first getSession()/fetch), and an in-memory DomainDb needs only the
+    // migrations run against it.
+    const db = new Database(':memory:')
+    runMigrations(db, import.meta.url)
+    const domainDb = new DomainDb({ raw: db })
+    const browserManager = new BrowserManager({ headless: true })
+    const tools = createTools(browserManager, domainDb)
+    const fetchPage = tools.find((t) => t.name === 'fetch_page')
+    if (!fetchPage) throw new Error('fetch_page tool not found')
+
+    const mcp = new McpFace({
+      sessions: {} as never, // initialize + listTools never touch browse sessions
+      fetchPage,
+      toolDeclarations: tools,
+    })
+    const base = await start({
+      fetchPage: async () => ({ url: '', method: '' }),
+      sessions: {} as never,
+      mcp,
+    })
+
+    const client = new Client({ name: 'routes-test-client', version: '0.0.0' })
+    const transport = new StreamableHTTPClientTransport(new URL(`${base}/mcp`))
+    try {
+      await client.connect(transport)
+      const { tools: listed } = await client.listTools()
+      const names = listed.map((t) => t.name)
+      expect(names).toContain('browse_wait')
+      expect(names).toContain('fetch_page')
+    } finally {
+      await client.close()
+      await mcp.closeAll()
     }
   })
 })

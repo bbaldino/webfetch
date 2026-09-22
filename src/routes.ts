@@ -6,6 +6,7 @@ import * as browse from './browse.js'
 import { SessionCapReached, SessionNotFound, type SessionManager } from './session-manager.js'
 import { openapiSpec } from './openapi.js'
 import { validateWaitFor, BrowseArgError } from './browse-tools.js'
+import type { McpFace } from './mcp-http.js'
 
 export type FetchPageHandler = (
   args: { url: string },
@@ -15,6 +16,7 @@ export type FetchPageHandler = (
 export interface RouterDeps {
   fetchPage: FetchPageHandler
   sessions: SessionManager
+  mcp: McpFace
 }
 
 function readBody(req: http.IncomingMessage): Promise<string> {
@@ -113,6 +115,15 @@ export function createRouter(deps: RouterDeps) {
           }
           return
         }
+      }
+
+      // The networked MCP endpoint (Streamable HTTP transport) — McpFace owns the
+      // transport lifecycle and writes the response itself; we just parse the body
+      // for POST (initialize + subsequent client messages) and delegate.
+      if (pathname === '/mcp') {
+        const body = req.method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : undefined
+        await deps.mcp.handle(req, res, body)
+        return
       }
 
       // A bare/wrong route is almost always a client misconfig (e.g. a base URL

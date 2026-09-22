@@ -20,6 +20,7 @@ import { DomainDb } from './domain-db.js'
 import { createTools } from './tools.js'
 import { SessionManager } from './session-manager.js'
 import { createRouter } from './routes.js'
+import { McpFace } from './mcp-http.js'
 
 const port = Number(process.env.PORT ?? 9000)
 const headless = process.env.WEBFETCH_HEADLESS !== 'false'
@@ -37,16 +38,37 @@ if (!fetchPage) throw new Error('fetch_page tool not found')
 
 const sessions = new SessionManager(browserManager, { max: maxSessions, ttlMs: sessionTtlMs })
 
+// WEBFETCH_MCP_ALLOWED_HOSTS: comma-separated `Host` values the /mcp endpoint accepts,
+// guarding against DNS-rebinding attacks. Defaults to the LAN hostnames this server is
+// normally reached at.
+// WEBFETCH_MCP_DNS_REBINDING: set to "false"/"0" to disable that check entirely — an
+// escape hatch for when the process sits behind nginx-proxy-manager and the forwarded
+// Host header doesn't match any of the above (default: protection ON).
+const dnsRebindingEnabled = !['false', '0'].includes(
+  (process.env.WEBFETCH_MCP_DNS_REBINDING ?? 'true').toLowerCase(),
+)
+const allowedHosts = dnsRebindingEnabled
+  ? (process.env.WEBFETCH_MCP_ALLOWED_HOSTS?.split(',').map((h) => h.trim()) ?? [
+      'webfetch.home',
+      '127.0.0.1:9000',
+      'localhost:9000',
+    ])
+  : undefined
+
+const mcp = new McpFace({ sessions, fetchPage, toolDeclarations: tools, allowedHosts })
+
 const server = http.createServer(
   createRouter({
     fetchPage: (args, ctx) => fetchPage.handler(args, ctx as never) as never,
     sessions,
+    mcp,
   }),
 )
 
 async function shutdown(): Promise<void> {
   server.close()
   try {
+    await mcp.closeAll()
     await browserManager.close()
   } finally {
     process.exit(0)
