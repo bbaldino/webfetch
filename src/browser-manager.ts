@@ -11,9 +11,11 @@ export interface BrowserSession {
 export class BrowserManager {
   private browser: Browser | null = null
   private sessions = new Map<string, BrowserSession>()
+  private tempContexts = new Set<BrowserContext>()
   private headless: boolean
   private jar: CookieJar | undefined
   private launchFn: (() => Promise<Browser>) | undefined
+  private closePromise: Promise<void> | undefined
 
   constructor(opts: { headless?: boolean; jar?: CookieJar; launch?: () => Promise<Browser> } = {}) {
     this.headless = opts.headless ?? true
@@ -64,6 +66,7 @@ export class BrowserManager {
 
   /** Close a context, first writing any cookies the sites rotated back to the jar. */
   async closeContext(context: BrowserContext): Promise<void> {
+    this.tempContexts.delete(context)
     if (this.jar) {
       try {
         this.jar.merge(await context.cookies())
@@ -80,12 +83,25 @@ export class BrowserManager {
    */
   async getSession(runId: string): Promise<BrowserSession> {
     const existing = this.sessions.get(runId)
-    if (existing && !existing.page.isClosed()) {
-      return existing
+    if (existing) {
+      if (!existing.page.isClosed()) {
+        return existing
+      }
+      // The caller closed the page out from under us (e.g. page.close() in a
+      // script). Merge and close the old context before replacing it, or its
+      // rotated cookies never reach the jar.
+      await this.closeContext(existing.context)
     }
 
     const context = await this.newContext()
-    const page = await context.newPage()
+    let page: Page
+    try {
+      page = await context.newPage()
+    } catch (err) {
+      // Nothing worth merging yet — just close the context we just opened.
+      await context.close().catch(() => {})
+      throw err
+    }
     const session: BrowserSession = { context, page, domain: undefined }
     this.sessions.set(runId, session)
     return session
@@ -97,7 +113,14 @@ export class BrowserManager {
    */
   async createTempPage(): Promise<{ context: BrowserContext; page: Page }> {
     const context = await this.newContext()
-    const page = await context.newPage()
+    let page: Page
+    try {
+      page = await context.newPage()
+    } catch (err) {
+      await context.close().catch(() => {})
+      throw err
+    }
+    this.tempContexts.add(context)
     return { context, page }
   }
 
@@ -113,11 +136,24 @@ export class BrowserManager {
   }
 
   /**
-   * Shut down the browser entirely.
+   * Shut down the browser entirely. Idempotent — a second call awaits the
+   * same in-flight (or settled) shutdown rather than racing it.
    */
   async close(): Promise<void> {
+    if (!this.closePromise) {
+      this.closePromise = this.doClose()
+    }
+    return this.closePromise
+  }
+
+  private async doClose(): Promise<void> {
     for (const [runId] of this.sessions) {
       await this.closeSession(runId)
+    }
+    // Temp-page contexts still in flight (e.g. a fetch mid-navigation) also
+    // get their write-back merged before we flush and kill the browser.
+    for (const context of this.tempContexts) {
+      await this.closeContext(context)
     }
     await this.jar?.flush()
     if (this.browser) {
