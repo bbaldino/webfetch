@@ -75,6 +75,12 @@ runs:
 { "url": "https://example.com/", "title": "Example Domain", "snapshot": "- document ..." }
 ```
 
+The envelope gains an optional `blocked: { reason, hint }` field when the page after the
+operation is a detected bot-protection wall (DataDome, Cloudflare, etc.) — see
+[Sites behind bot protection](#sites-behind-bot-protection). The call still succeeds (the
+`snapshot` is whatever the wall's page is, in case that's useful), but the caller no longer has
+to guess from an iframe-only snapshot that something blocked it.
+
 `wait_for` (used by both `navigate`'s optional field and the standalone `wait` op) is one of:
 
 - `{ "role": "...", "name": "..." }` — wait for an element with that accessible role/name to
@@ -120,6 +126,57 @@ By default the endpoint only accepts requests whose `Host` header matches the LA
 normally reached at (DNS-rebinding protection); see `WEBFETCH_MCP_ALLOWED_HOSTS` and
 `WEBFETCH_MCP_DNS_REBINDING` in [Configuration](#configuration) if it sits behind a reverse proxy.
 
+## Sites behind bot protection
+
+Some sites (Yelp among them) sit behind DataDome-class bot protection that blocks every
+browser-automation approach on its own — headless or headed, stealth or not. What gets through
+is an **aged cookie jar exported from a real, long-used desktop browser**: injecting those
+cookies (including the site's own bot-protection cookie) into a fresh Camoufox context makes it
+look like the same trusted visitor who's been browsing the site for months. webfetch does this
+automatically for every browser context — `fetch_page`, `/sessions`, and the MCP `browse_*`
+tools all share one jar — so once a domain's cookies are in it, it just works.
+
+**Export**, on the desktop where the site already works in a normal Chrome:
+
+```sh
+npm run export-cookies -- --domain yelp.com [--domain other.com]
+```
+
+This reads Chrome's cookie database directly, so it needs the OS keyring secret Chrome encrypts
+cookies with; on Linux that's `secret-tool` (`gnome-keyring` / `libsecret`), which the tool shells
+out to automatically. Only the named domains are read and written — nothing else in the browser's
+cookie store is touched.
+
+**Deliver** the exported file to the running service (the export command prints this exact line
+with your paths filled in):
+
+```sh
+cat cookies.json | ssh docker 'docker exec -i webfetch sh -c "cat > /data/cookies.json && chmod 600 /data/cookies.json"'
+```
+
+No restart needed: the jar is **hot-reloaded** — webfetch stats the file before each new browser
+context and re-reads it if it changed, so a copied-in jar takes effect on the very next fetch or
+session. Cookies a site rotates during a visit are **written back** to the jar when a context
+closes (debounced, atomic, mode `600`), but only for domains the jar already covers — it never
+picks up cookies from arbitrary sites the browser happens to visit.
+
+Point webfetch at a different jar path with `WEBFETCH_COOKIE_JAR` (default `/data/cookies.json`);
+a missing file just means an empty jar, not an error.
+
+**When cookies go stale:** a jar's cookies eventually expire or get rotated out from under it. A
+`fetch_page` call against a domain the jar covers, that hits a bot wall anyway, fails with a
+message naming the site and saying its jar cookies look stale — re-export and re-deliver as
+above. The session/MCP `browse_*` envelope carries the same signal as an optional
+`blocked: { reason, hint }` field instead of failing the call outright (see
+[Interactive sessions](#interactive-sessions)).
+
+**Security:** the jar holds live session cookies for the exported domains — potentially a
+logged-in account. It's written mode `600`, its contents are never logged (not even cookie
+names on their own get printed by anything but this export tool, and never values), and
+write-back only ever touches domains already in the jar. Keep webfetch LAN-only — never expose
+its port externally — since a browser seeded with real cookies is a more valuable target than a
+stateless fetcher.
+
 ## Run
 
 ```sh
@@ -135,6 +192,7 @@ npm test              # unit tests (reddit parsing / block detection / routes / 
 npm run test:integration          # live Reddit fetches (needs network; REDDIT_INTEGRATION=1)
 npm run test:integration:browse   # live session API against a real Camoufox (BROWSE_INTEGRATION=1)
 npm run test:integration:mcp      # live /mcp endpoint against a real Camoufox (MCP_INTEGRATION=1)
+npm run test:integration:yelp     # live Yelp via the cookie jar (YELP_INTEGRATION=1, needs a jar)
 ```
 
 ### Docker
@@ -151,12 +209,13 @@ need a tweak on a first real build.
 
 ## Configuration
 
-| Env var                      | Default       | Meaning                                                                         |
-| ---------------------------- | ------------- | ------------------------------------------------------------------------------- |
-| `PORT`                       | `9000`        | REST listen port.                                                               |
-| `WEBFETCH_DB`                | `:memory:`    | SQLite path for the per-domain method-learning store.                           |
-| `WEBFETCH_HEADLESS`          | `true`        | Set `false` to launch Camoufox headed (local debugging).                        |
-| `WEBFETCH_MAX_SESSIONS`      | `3`           | Max concurrent `/sessions`; `POST /sessions` past the cap is `429`.             |
-| `WEBFETCH_SESSION_TTL_MS`    | `300000`      | Idle timeout (ms) for a session; each op resets the timer.                      |
-| `WEBFETCH_MCP_ALLOWED_HOSTS` | LAN hostnames | Comma-separated `Host` values `/mcp` accepts (DNS-rebinding protection).        |
-| `WEBFETCH_MCP_DNS_REBINDING` | `true`        | Set `false`/`0` to disable the `/mcp` Host check (e.g. behind a reverse proxy). |
+| Env var                      | Default              | Meaning                                                                                   |
+| ---------------------------- | -------------------- | ----------------------------------------------------------------------------------------- |
+| `PORT`                       | `9000`               | REST listen port.                                                                         |
+| `WEBFETCH_DB`                | `:memory:`           | SQLite path for the per-domain method-learning store.                                     |
+| `WEBFETCH_HEADLESS`          | `true`               | Set `false` to launch Camoufox headed (local debugging).                                  |
+| `WEBFETCH_MAX_SESSIONS`      | `3`                  | Max concurrent `/sessions`; `POST /sessions` past the cap is `429`.                       |
+| `WEBFETCH_SESSION_TTL_MS`    | `300000`             | Idle timeout (ms) for a session; each op resets the timer.                                |
+| `WEBFETCH_MCP_ALLOWED_HOSTS` | LAN hostnames        | Comma-separated `Host` values `/mcp` accepts (DNS-rebinding protection).                  |
+| `WEBFETCH_MCP_DNS_REBINDING` | `true`               | Set `false`/`0` to disable the `/mcp` Host check (e.g. behind a reverse proxy).           |
+| `WEBFETCH_COOKIE_JAR`        | `/data/cookies.json` | Path to the cookie jar (see [Sites behind bot protection](#sites-behind-bot-protection)). |

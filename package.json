@@ -17,6 +17,7 @@
     "test:integration": "REDDIT_INTEGRATION=1 vitest run src/reddit.integration.test.ts",
     "test:integration:browse": "BROWSE_INTEGRATION=1 vitest run src/browse-sessions.integration.test.ts",
     "test:integration:mcp": "MCP_INTEGRATION=1 vitest run src/mcp.integration.test.ts",
+    "test:integration:yelp": "YELP_INTEGRATION=1 vitest run src/cookie-jar.integration.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "engines": {
