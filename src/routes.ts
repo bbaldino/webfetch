@@ -121,7 +121,15 @@ export function createRouter(deps: RouterDeps) {
       // transport lifecycle and writes the response itself; we just parse the body
       // for POST (initialize + subsequent client messages) and delegate.
       if (pathname === '/mcp') {
-        const body = req.method === 'POST' ? JSON.parse((await readBody(req)) || '{}') : undefined
+        let body: unknown
+        if (req.method === 'POST') {
+          try {
+            body = JSON.parse((await readBody(req)) || '{}')
+          } catch {
+            json(res, 400, { error: 'invalid JSON body' })
+            return
+          }
+        }
         await deps.mcp.handle(req, res, body)
         return
       }

@@ -20,7 +20,7 @@ import { DomainDb } from './domain-db.js'
 import { createTools } from './tools.js'
 import { SessionManager } from './session-manager.js'
 import { createRouter } from './routes.js'
-import { McpFace } from './mcp-http.js'
+import { McpFace, parseAllowedHosts } from './mcp-http.js'
 
 const port = Number(process.env.PORT ?? 9000)
 const headless = process.env.WEBFETCH_HEADLESS !== 'false'
@@ -47,13 +47,7 @@ const sessions = new SessionManager(browserManager, { max: maxSessions, ttlMs: s
 const dnsRebindingEnabled = !['false', '0'].includes(
   (process.env.WEBFETCH_MCP_DNS_REBINDING ?? 'true').toLowerCase(),
 )
-const allowedHosts = dnsRebindingEnabled
-  ? (process.env.WEBFETCH_MCP_ALLOWED_HOSTS?.split(',').map((h) => h.trim()) ?? [
-      'webfetch.home',
-      '127.0.0.1:9000',
-      'localhost:9000',
-    ])
-  : undefined
+const allowedHosts = parseAllowedHosts(process.env.WEBFETCH_MCP_ALLOWED_HOSTS, dnsRebindingEnabled)
 
 const mcp = new McpFace({ sessions, fetchPage, toolDeclarations: tools, allowedHosts })
 

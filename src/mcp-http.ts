@@ -35,6 +35,29 @@ function json(res: http.ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body))
 }
 
+const DEFAULT_ALLOWED_HOSTS = ['webfetch.home', '127.0.0.1:9000', 'localhost:9000']
+
+/**
+ * Parse the `WEBFETCH_MCP_ALLOWED_HOSTS` env value into the `allowedHosts` list
+ * `McpFace` expects, given whether DNS-rebinding protection is enabled
+ * (`WEBFETCH_MCP_DNS_REBINDING`, false/0 = disabled). Pure — no env access here,
+ * so it's directly testable. Blank/whitespace-only entries (and an unset or
+ * empty `raw`) fall back to the default LAN host list; `dnsEnabled: false`
+ * always returns `undefined` (disables the check entirely), matching the
+ * escape hatch documented in `server.ts`.
+ */
+export function parseAllowedHosts(
+  raw: string | undefined,
+  dnsEnabled: boolean,
+): string[] | undefined {
+  if (!dnsEnabled) return undefined
+  const hosts = (raw ?? '')
+    .split(',')
+    .map((h) => h.trim())
+    .filter(Boolean)
+  return hosts.length ? hosts : DEFAULT_ALLOWED_HOSTS
+}
+
 export class McpFace {
   // Transport/server per MCP client session (keyed by Mcp-Session-Id).
   private entries = new Map<string, Entry>()

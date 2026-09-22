@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { McpFace } from './mcp-http.js'
+import { McpFace, parseAllowedHosts } from './mcp-http.js'
 import { SessionCapReached, SessionNotFound } from './session-manager.js'
 import type { ToolDeclaration } from './core-compat.js'
 
@@ -100,5 +100,30 @@ describe('McpFace.makeCallTool', () => {
     await expect(face.makeCallTool('m1')('browse_snapshot', {})).rejects.toBeInstanceOf(
       SessionCapReached,
     )
+  })
+})
+
+describe('parseAllowedHosts', () => {
+  const DEFAULT = ['webfetch.home', '127.0.0.1:9000', 'localhost:9000']
+
+  it('undefined raw with DNS enabled falls back to the default list', () => {
+    expect(parseAllowedHosts(undefined, true)).toEqual(DEFAULT)
+  })
+
+  it('empty string raw with DNS enabled falls back to the default list', () => {
+    expect(parseAllowedHosts('', true)).toEqual(DEFAULT)
+  })
+
+  it('drops empty entries from a comma-separated list', () => {
+    expect(parseAllowedHosts('a,,b', true)).toEqual(['a', 'b'])
+  })
+
+  it('DNS disabled always returns undefined, regardless of raw', () => {
+    expect(parseAllowedHosts('a,b', false)).toBeUndefined()
+    expect(parseAllowedHosts(undefined, false)).toBeUndefined()
+  })
+
+  it('drops a trailing empty entry from a trailing comma', () => {
+    expect(parseAllowedHosts('webfetch.home,', true)).toEqual(['webfetch.home'])
   })
 })

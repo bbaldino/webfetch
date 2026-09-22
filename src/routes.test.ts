@@ -281,4 +281,19 @@ describe('MCP /mcp handshake', () => {
       await mcp.closeAll()
     }
   })
+
+  it('POST /mcp with malformed JSON returns 400, not 500', async () => {
+    const base = await start({
+      fetchPage: async () => ({ url: '', method: '' }),
+      sessions: {} as never,
+      mcp: {} as never, // never reached — the bad body is rejected before mcp.handle
+    })
+    const res = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: '{ not json',
+    })
+    expect(res.status).toBe(400)
+    expect((await res.json()).error).toBe('invalid JSON body')
+  })
 })
