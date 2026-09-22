@@ -12,12 +12,17 @@ import Database from 'better-sqlite3'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { runMigrations, type ToolContext } from './core-compat.js'
 import { BrowserManager } from './browser-manager.js'
+import { CookieJar } from './cookie-jar.js'
+import { setJarCoverage } from './detect-block.js'
 import { DomainDb } from './domain-db.js'
 import { createTools } from './tools.js'
 import { createMcpServer } from './mcp-server.js'
 
 const headless = process.env.WEBFETCH_HEADLESS !== 'false'
-const browserManager = new BrowserManager({ headless })
+// Cookies exported from a real browser (npm run export-cookies); missing file = empty jar.
+const jar = new CookieJar(process.env.WEBFETCH_COOKIE_JAR ?? '/data/cookies.json')
+setJarCoverage((host) => jar.covers(host))
+const browserManager = new BrowserManager({ headless, jar })
 
 // Plugin DB: defaults to in-memory. The webfetch SQL migrations create the
 // `domain_stats` / `domain_config` tables that DomainDb reads and writes.

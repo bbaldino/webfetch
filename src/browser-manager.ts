@@ -1,5 +1,6 @@
 import { firefox, type Browser, type BrowserContext, type Page } from 'playwright-core'
 import { launchOptions } from 'camoufox-js'
+import type { CookieJar } from './cookie-jar.js'
 
 export interface BrowserSession {
   context: BrowserContext
@@ -11,13 +12,21 @@ export class BrowserManager {
   private browser: Browser | null = null
   private sessions = new Map<string, BrowserSession>()
   private headless: boolean
+  private jar: CookieJar | undefined
+  private launchFn: (() => Promise<Browser>) | undefined
 
-  constructor(opts: { headless?: boolean } = {}) {
+  constructor(opts: { headless?: boolean; jar?: CookieJar; launch?: () => Promise<Browser> } = {}) {
     this.headless = opts.headless ?? true
+    this.jar = opts.jar
+    this.launchFn = opts.launch
   }
 
   private async ensureBrowser(): Promise<Browser> {
     if (this.browser && this.browser.isConnected()) {
+      return this.browser
+    }
+    if (this.launchFn) {
+      this.browser = await this.launchFn()
       return this.browser
     }
     // Camoufox (a Firefox fork) spoofs the fingerprint — navigator, WebGL,
@@ -43,6 +52,28 @@ export class BrowserManager {
     return this.browser
   }
 
+  private async newContext(): Promise<BrowserContext> {
+    const browser = await this.ensureBrowser()
+    const context = await browser.newContext()
+    // Seed every context with the cookie jar so bot-protected sites see a trusted visitor.
+    await this.jar
+      ?.inject(context)
+      .catch((err: Error) => console.error(`cookie jar inject failed: ${err.message}`))
+    return context
+  }
+
+  /** Close a context, first writing any cookies the sites rotated back to the jar. */
+  async closeContext(context: BrowserContext): Promise<void> {
+    if (this.jar) {
+      try {
+        this.jar.merge(await context.cookies())
+      } catch {
+        /* best-effort: never fail a close over write-back */
+      }
+    }
+    await context.close().catch(() => {})
+  }
+
   /**
    * Get or create a browser session for an agent run.
    * Each agent run gets its own BrowserContext for isolation.
@@ -53,8 +84,7 @@ export class BrowserManager {
       return existing
     }
 
-    const browser = await this.ensureBrowser()
-    const context = await browser.newContext()
+    const context = await this.newContext()
     const page = await context.newPage()
     const session: BrowserSession = { context, page, domain: undefined }
     this.sessions.set(runId, session)
@@ -66,8 +96,7 @@ export class BrowserManager {
    * Caller is responsible for closing the page and context.
    */
   async createTempPage(): Promise<{ context: BrowserContext; page: Page }> {
-    const browser = await this.ensureBrowser()
-    const context = await browser.newContext()
+    const context = await this.newContext()
     const page = await context.newPage()
     return { context, page }
   }
@@ -79,11 +108,7 @@ export class BrowserManager {
     const session = this.sessions.get(runId)
     if (session) {
       this.sessions.delete(runId)
-      try {
-        await session.context.close()
-      } catch {
-        // Context may already be closed
-      }
+      await this.closeContext(session.context)
     }
   }
 
@@ -94,6 +119,7 @@ export class BrowserManager {
     for (const [runId] of this.sessions) {
       await this.closeSession(runId)
     }
+    await this.jar?.flush()
     if (this.browser) {
       try {
         await this.browser.close()

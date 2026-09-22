@@ -16,6 +16,8 @@ import http from 'node:http'
 import Database from 'better-sqlite3'
 import { runMigrations } from './core-compat.js'
 import { BrowserManager } from './browser-manager.js'
+import { CookieJar } from './cookie-jar.js'
+import { setJarCoverage } from './detect-block.js'
 import { DomainDb } from './domain-db.js'
 import { createTools } from './tools.js'
 import { SessionManager } from './session-manager.js'
@@ -28,7 +30,10 @@ const headless = process.env.WEBFETCH_HEADLESS !== 'false'
 const maxSessions = Number(process.env.WEBFETCH_MAX_SESSIONS ?? 3)
 const sessionTtlMs = Number(process.env.WEBFETCH_SESSION_TTL_MS ?? 300000)
 
-const browserManager = new BrowserManager({ headless })
+// Cookies exported from a real browser (npm run export-cookies); missing file = empty jar.
+const jar = new CookieJar(process.env.WEBFETCH_COOKIE_JAR ?? '/data/cookies.json')
+setJarCoverage((host) => jar.covers(host))
+const browserManager = new BrowserManager({ headless, jar })
 const db = new Database(process.env.WEBFETCH_DB ?? ':memory:')
 runMigrations(db, import.meta.url)
 const domainDb = new DomainDb({ raw: db })

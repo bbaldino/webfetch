@@ -1,5 +1,5 @@
 import { z } from 'zod'
-import type { Page } from 'playwright-core'
+import type { BrowserContext, Page } from 'playwright-core'
 import { defineTool, type ToolDeclaration } from './core-compat.js'
 import type { BrowserManager } from './browser-manager.js'
 import type { DomainDb } from './domain-db.js'
@@ -126,7 +126,7 @@ async function directFetch(url: string): Promise<FetchOutcome> {
  * Browser-based fetch of a URL.
  */
 async function browserFetch(url: string, browserManager: BrowserManager): Promise<FetchOutcome> {
-  let context: { close(): Promise<void> } | undefined
+  let context: BrowserContext | undefined
   try {
     const temp = await browserManager.createTempPage()
     context = temp.context
@@ -153,7 +153,7 @@ async function browserFetch(url: string, browserManager: BrowserManager): Promis
       title: '',
     }
   } finally {
-    if (context) await context.close().catch(() => {})
+    if (context) await browserManager.closeContext(context)
   }
 }
 
