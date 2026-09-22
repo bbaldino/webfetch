@@ -111,7 +111,7 @@ than calling it directly.
 
 It's the same tool set as the stdio `standalone.ts` server described above — `fetch_page` plus
 the full `browse_*` surface (`browse_navigate`, `browse_snapshot`, `browse_click`, `browse_type`,
-`browse_scroll`, `browse_back`, `browse_select`, `browse_press`, `browse_wait`) — just reachable
+`browse_scroll`, `browse_go_back`, `browse_select_option`, `browse_press_key`, `browse_wait`) — just reachable
 over the network instead of stdio. Each connected MCP client gets its own capped browser session
 (`browse_*` calls create it lazily on first use), governed by the same `WEBFETCH_MAX_SESSIONS`
 and `WEBFETCH_SESSION_TTL_MS` env vars as `/sessions`.
