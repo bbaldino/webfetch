@@ -7,6 +7,7 @@ import {
   utimesSync,
   rmSync,
   existsSync,
+  promises as fsp,
 } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
@@ -121,5 +122,49 @@ describe('CookieJar', () => {
     jar.merge([ck('a', '.yelp.com')])
     await jar.flush()
     expect(jar.cookies()).toEqual([])
+  })
+
+  it('a merge that lands while a write is in flight is not lost', async () => {
+    writeFileSync(path, JSON.stringify([ck('datadome', '.yelp.com', 'old')]))
+    const jar = new CookieJar(path, { debounceMs: 10_000 })
+    jar.cookies()
+    jar.merge([ck('datadome', '.yelp.com', 'first')])
+
+    // Signal once writeNow has actually called writeFile (so it has already captured its
+    // pre-merge snapshot as an argument), then stall inside the call until released.
+    let entered: () => void = () => {}
+    const enteredGate = new Promise<void>((r) => (entered = r))
+    let release: () => void = () => {}
+    const stallGate = new Promise<void>((r) => (release = r))
+    const realWriteFile = fsp.writeFile.bind(fsp)
+    const spy = vi
+      .spyOn(fsp, 'writeFile')
+      .mockImplementation(async (...args: Parameters<typeof fsp.writeFile>) => {
+        entered()
+        await stallGate
+        return realWriteFile(...args)
+      })
+
+    const flush1 = jar.flush()
+    await enteredGate // writeNow is now stalled inside writeFile, snapshot already captured
+    // A merge lands while the first write is stalled mid-flight.
+    jar.merge([ck('datadome', '.yelp.com', 'second')])
+    release()
+    await flush1
+    spy.mockRestore()
+
+    await jar.flush()
+    const written = JSON.parse(readFileSync(path, 'utf8')) as Cookie[]
+    expect(written[0].value).toBe('second')
+  })
+
+  it('merge keeps a related cookie regardless of which side is the parent domain', () => {
+    writeFileSync(path, JSON.stringify([ck('seed', 'www.yelp.com')]))
+    const jar = new CookieJar(path, { debounceMs: 10_000 })
+    jar.cookies()
+    jar.merge([ck('datadome', '.yelp.com', 'rotated'), ck('other', '.other.com')])
+    const domains = jar.cookies().map((c) => c.domain)
+    expect(domains).toContain('.yelp.com') // parent domain kept: related to www.yelp.com
+    expect(domains).not.toContain('.other.com') // unrelated domain dropped
   })
 })

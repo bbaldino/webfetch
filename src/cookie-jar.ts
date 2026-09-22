@@ -7,8 +7,13 @@ import { promises as fsp, readFileSync, statSync } from 'node:fs'
 import type { BrowserContext, Cookie } from 'playwright-core'
 
 const bare = (domain: string) => domain.replace(/^\./, '').toLowerCase()
-const cookieKey = (c: Cookie) => `${c.name}\u0000${c.domain}\u0000${c.path}`
+const cookieKey = (c: Cookie) => `${c.name}\u0000${c.domain.toLowerCase()}\u0000${c.path}`
 const live = (c: Cookie, now: number) => c.expires === -1 || c.expires > now
+
+// True when d and j are the same site or one is a parent domain of the other — either
+// direction, since an incoming rotated cookie may be scoped narrower or wider than
+// whatever's already in the jar for that site.
+const related = (d: string, j: string) => d === j || d.endsWith(`.${j}`) || j.endsWith(`.${d}`)
 
 // Playwright rejects SameSite=None without Secure; downgrade rather than drop the cookie.
 const sanitize = (c: Cookie): Cookie =>
@@ -18,6 +23,7 @@ export class CookieJar {
   private jar: Cookie[] = []
   private mtimeMs = -1
   private dirty = false
+  private version = 0
   private timer: ReturnType<typeof setTimeout> | undefined
   private writeChain: Promise<void> = Promise.resolve()
 
@@ -73,14 +79,23 @@ export class CookieJar {
   merge(fromContext: Cookie[]): void {
     if (!this.path) return
     this.reloadIfChanged()
-    const covered = fromContext.filter((c) => this.covers(bare(c.domain)))
+    const now = Date.now() / 1000
+    // Compute the jar's covered domains once (from the in-memory jar, no extra stat/read
+    // per incoming cookie) rather than calling covers() — which re-derives this from a
+    // fresh stat/parse — for every cookie in fromContext.
+    const jarDomains = new Set(this.jar.filter((c) => live(c, now)).map((c) => bare(c.domain)))
+    const covered = fromContext.filter((c) => {
+      const d = bare(c.domain)
+      for (const j of jarDomains) if (related(d, j)) return true
+      return false
+    })
     if (covered.length === 0) return
     const byKey = new Map(this.jar.map((c) => [cookieKey(c), c]))
     for (const c of covered) byKey.set(cookieKey(c), c)
-    const now = Date.now() / 1000
     const next = [...byKey.values()].filter((c) => live(c, now))
     if (JSON.stringify(next) === JSON.stringify(this.jar)) return
     this.jar = next
+    this.version++
     this.dirty = true
     clearTimeout(this.timer)
     this.timer = setTimeout(() => void this.flush(), this.opts.debounceMs ?? 1000)
@@ -100,6 +115,11 @@ export class CookieJar {
 
   private async writeNow(): Promise<void> {
     if (!this.path || !this.dirty) return
+    // Capture what we're about to write before the first await: a merge() landing while
+    // this write is in flight mutates this.jar/this.version for the *next* write, not this
+    // one, so it must never be silently lost.
+    const capturedVersion = this.version
+    const snapshot = JSON.stringify(this.jar)
     let onDisk = -1
     try {
       onDisk = (await fsp.stat(this.path)).mtimeMs
@@ -112,9 +132,15 @@ export class CookieJar {
       return
     }
     const tmp = `${this.path}.${process.pid}.tmp`
-    await fsp.writeFile(tmp, JSON.stringify(this.jar), { mode: 0o600 })
+    await fsp.writeFile(tmp, snapshot, { mode: 0o600 })
+    // Accepted race: an external copy landing between the mtime check above and this
+    // rename would still be overwritten by ours. Closing that fully needs file locking,
+    // which isn't worth it for a cookie jar — the hot-reload path picks up their copy on
+    // the very next read anyway.
     await fsp.rename(tmp, this.path)
     this.mtimeMs = (await fsp.stat(this.path)).mtimeMs
-    this.dirty = false
+    // Only clear dirty if nothing changed the jar while we were writing; otherwise the
+    // next flush() must pick up what merge() added in the meantime.
+    this.dirty = this.version !== capturedVersion
   }
 }
