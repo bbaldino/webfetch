@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/bbaldino/webfetch/compare/v0.3.0...v0.4.0) (2026-09-22)
+
+
+### Features
+
+* McpFace — HTTP MCP with per-client capped browse sessions ([327bb94](https://github.com/bbaldino/webfetch/commit/327bb94a016bf678907671c234091b716f76db6e))
+* mount the MCP endpoint at /mcp on the webfetch server ([aa20718](https://github.com/bbaldino/webfetch/commit/aa20718bfaccd7cb2cc85c0f345b20eb9feeb037))
+* shared browse-tool dispatch; add browse_wait and navigate wait_for ([bb03938](https://github.com/bbaldino/webfetch/commit/bb03938222bfc92c1b2be0e2fbc52873ba2d502e))
+
+
+### Bug Fixes
+
+* address final-review findings for the MCP endpoint ([94ba692](https://github.com/bbaldino/webfetch/commit/94ba6928988d95f297f4b821ece00e0cb850ff36))
+* clean 400 for malformed /mcp JSON body; extract parseAllowedHosts ([6462081](https://github.com/bbaldino/webfetch/commit/64620814ebbdb4c532e479e163ad883331ec0bc2))
+* correct MCP tool names in README (browse_go_back/select_option/press_key) ([82929c6](https://github.com/bbaldino/webfetch/commit/82929c63df09526d166580ba534db6a2493ff395))
+
 ## [0.3.0](https://github.com/bbaldino/webfetch/compare/v0.2.3...v0.3.0) (2026-09-20)
 
 
