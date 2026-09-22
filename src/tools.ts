@@ -1,10 +1,11 @@
 import { z } from 'zod'
+import type { Page } from 'playwright-core'
 import { defineTool, type ToolDeclaration } from './core-compat.js'
 import type { BrowserManager } from './browser-manager.js'
 import type { DomainDb } from './domain-db.js'
 import { isRedditUrl, fetchReddit } from './reddit.js'
 import { rewriteUrl } from './url-rewrite.js'
-import * as browse from './browse.js'
+import { callBrowseTool } from './browse-tools.js'
 
 /**
  * Extract a run ID from the tool context.
@@ -156,6 +157,11 @@ async function browserFetch(url: string, browserManager: BrowserManager): Promis
   }
 }
 
+const waitForParam = z
+  .union([z.object({ role: z.string(), name: z.string() }), z.object({ text: z.string() })])
+  .optional()
+  .describe('Wait until an element by role+name, or text, appears.')
+
 export function createTools(browserManager: BrowserManager, domainDb: DomainDb): ToolDeclaration[] {
   return [
     defineTool({
@@ -253,11 +259,13 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         'role and name — use these to identify elements for browse_click and browse_type.',
       params: z.object({
         url: z.string().describe('The URL to navigate to'),
+        wait_for: waitForParam,
+        timeout_ms: z.number().optional().describe('Max time to wait, in milliseconds'),
       }),
       async handler(params, ctx) {
-        const session = await browserManager.getSession(getRunId(ctx))
-        const r = await browse.navigate(session.page, params.url)
-        return { url: r.url, title: r.title, snapshot: r.snapshot }
+        const run = async <T>(fn: (p: Page) => Promise<T>) =>
+          fn((await browserManager.getSession(getRunId(ctx))).page)
+        return callBrowseTool('browse_navigate', params as Record<string, unknown>, run)
       },
     }),
 
@@ -268,9 +276,9 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         'showing interactive elements with their role and name.',
       params: z.object({}),
       async handler(_params, ctx) {
-        const session = await browserManager.getSession(getRunId(ctx))
-        const r = await browse.snapshot(session.page)
-        return { url: r.url, title: r.title, snapshot: r.snapshot }
+        const run = async <T>(fn: (p: Page) => Promise<T>) =>
+          fn((await browserManager.getSession(getRunId(ctx))).page)
+        return callBrowseTool('browse_snapshot', {}, run)
       },
     }),
 
@@ -284,14 +292,9 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         name: z.string().describe('Accessible name of the element'),
       }),
       async handler(params, ctx) {
-        const session = await browserManager.getSession(getRunId(ctx))
-        try {
-          const r = await browse.click(session.page, params.role, params.name)
-          return { snapshot: r.snapshot }
-        } catch (err) {
-          if (err instanceof browse.InvalidRoleError) return { error: err.message }
-          throw err
-        }
+        const run = async <T>(fn: (p: Page) => Promise<T>) =>
+          fn((await browserManager.getSession(getRunId(ctx))).page)
+        return callBrowseTool('browse_click', params as Record<string, unknown>, run)
       },
     }),
 
@@ -309,20 +312,9 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         submit: z.boolean().optional().describe('Press Enter after typing (default: false)'),
       }),
       async handler(params, ctx) {
-        const session = await browserManager.getSession(getRunId(ctx))
-        try {
-          const r = await browse.type(
-            session.page,
-            params.role,
-            params.name,
-            params.text,
-            params.submit,
-          )
-          return { snapshot: r.snapshot }
-        } catch (err) {
-          if (err instanceof browse.InvalidRoleError) return { error: err.message }
-          throw err
-        }
+        const run = async <T>(fn: (p: Page) => Promise<T>) =>
+          fn((await browserManager.getSession(getRunId(ctx))).page)
+        return callBrowseTool('browse_type', params as Record<string, unknown>, run)
       },
     }),
 
@@ -333,9 +325,9 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         key: z.string().describe('The key to press'),
       }),
       async handler(params, ctx) {
-        const session = await browserManager.getSession(getRunId(ctx))
-        const r = await browse.pressKey(session.page, params.key)
-        return { snapshot: r.snapshot }
+        const run = async <T>(fn: (p: Page) => Promise<T>) =>
+          fn((await browserManager.getSession(getRunId(ctx))).page)
+        return callBrowseTool('browse_press_key', params as Record<string, unknown>, run)
       },
     }),
 
@@ -348,14 +340,9 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         values: z.array(z.string()).describe('Values to select'),
       }),
       async handler(params, ctx) {
-        const session = await browserManager.getSession(getRunId(ctx))
-        try {
-          const r = await browse.selectOption(session.page, params.role, params.name, params.values)
-          return { snapshot: r.snapshot }
-        } catch (err) {
-          if (err instanceof browse.InvalidRoleError) return { error: err.message }
-          throw err
-        }
+        const run = async <T>(fn: (p: Page) => Promise<T>) =>
+          fn((await browserManager.getSession(getRunId(ctx))).page)
+        return callBrowseTool('browse_select_option', params as Record<string, unknown>, run)
       },
     }),
 
@@ -364,9 +351,9 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
       description: 'Navigate back to the previous page.',
       params: z.object({}),
       async handler(_params, ctx) {
-        const session = await browserManager.getSession(getRunId(ctx))
-        const r = await browse.goBack(session.page)
-        return { url: r.url, title: r.title, snapshot: r.snapshot }
+        const run = async <T>(fn: (p: Page) => Promise<T>) =>
+          fn((await browserManager.getSession(getRunId(ctx))).page)
+        return callBrowseTool('browse_go_back', {}, run)
       },
     }),
 
@@ -378,9 +365,28 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
         amount: z.number().optional().describe('Pixels to scroll (default: 500)'),
       }),
       async handler(params, ctx) {
-        const session = await browserManager.getSession(getRunId(ctx))
-        const r = await browse.scroll(session.page, params.direction, params.amount)
-        return { snapshot: r.snapshot }
+        const run = async <T>(fn: (p: Page) => Promise<T>) =>
+          fn((await browserManager.getSession(getRunId(ctx))).page)
+        return callBrowseTool('browse_scroll', params as Record<string, unknown>, run)
+      },
+    }),
+
+    defineTool({
+      name: 'browse_wait',
+      description:
+        'Wait for an element to appear on the page, identified by ARIA role+name or by visible ' +
+        'text. Use this after an action that triggers async loading (e.g., a click that opens a ' +
+        'modal or fetches data) before taking a snapshot or interacting further.',
+      params: z.object({
+        wait_for: z
+          .union([z.object({ role: z.string(), name: z.string() }), z.object({ text: z.string() })])
+          .describe('Element to wait for, by role+name or by text'),
+        timeout_ms: z.number().optional().describe('Max time to wait, in milliseconds'),
+      }),
+      async handler(params, ctx) {
+        const run = async <T>(fn: (p: Page) => Promise<T>) =>
+          fn((await browserManager.getSession(getRunId(ctx))).page)
+        return callBrowseTool('browse_wait', params as Record<string, unknown>, run)
       },
     }),
   ]
