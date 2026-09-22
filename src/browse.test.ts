@@ -123,4 +123,17 @@ describe('BrowseController', () => {
     expect(page.getByRole).toHaveBeenCalledWith('button', { name: 'Go' })
     expect(locator.waitFor).toHaveBeenCalledWith({ state: 'visible', timeout: 1234 })
   })
+
+  it('adds a blocked notice to the envelope when the page is a bot wall', async () => {
+    const { page } = mockPage({
+      frames: () => [{ url: () => 'https://geo.captcha-delivery.com/captcha/?x' }],
+    })
+    const r = await browse.snapshot(page as never)
+    expect(r.blocked?.reason).toBe('datadome')
+  })
+
+  it('omits blocked for normal pages', async () => {
+    const { page } = mockPage()
+    expect((await browse.snapshot(page as never)).blocked).toBeUndefined()
+  })
 })

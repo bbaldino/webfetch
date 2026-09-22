@@ -6,6 +6,7 @@ import type { DomainDb } from './domain-db.js'
 import { isRedditUrl, fetchReddit } from './reddit.js'
 import { rewriteUrl } from './url-rewrite.js'
 import { callBrowseTool } from './browse-tools.js'
+import { detectBlock, blockNotice, type PageSignals } from './detect-block.js'
 
 /**
  * Extract a run ID from the tool context.
@@ -123,6 +124,49 @@ async function directFetch(url: string): Promise<FetchOutcome> {
 }
 
 /**
+ * Turn raw page signals from a browser fetch into a FetchOutcome: a detected bot
+ * wall or empty content is reported as a failure (never a silent empty success),
+ * so downstream domain-method learning and callers see it as one.
+ */
+export function browserOutcome(
+  url: string,
+  s: PageSignals & { text: string; finalUrl: string; title: string },
+): FetchOutcome {
+  const reason = detectBlock(s)
+  if (reason) {
+    return {
+      ok: false,
+      content: blockNotice(s.finalUrl || url, reason).hint,
+      bytes: 0,
+      finalUrl: s.finalUrl,
+      title: s.title,
+    }
+  }
+  if (s.text.trim().length === 0) {
+    let host = url
+    try {
+      host = new URL(s.finalUrl || url).hostname.replace(/^www\./, '')
+    } catch {
+      /* keep */
+    }
+    return {
+      ok: false,
+      content: `no content extracted from ${host}`,
+      bytes: 0,
+      finalUrl: s.finalUrl,
+      title: s.title,
+    }
+  }
+  return {
+    ok: true,
+    content: s.text.slice(0, 50000),
+    bytes: s.text.length,
+    finalUrl: s.finalUrl,
+    title: s.title,
+  }
+}
+
+/**
  * Browser-based fetch of a URL.
  */
 async function browserFetch(url: string, browserManager: BrowserManager): Promise<FetchOutcome> {
@@ -132,18 +176,18 @@ async function browserFetch(url: string, browserManager: BrowserManager): Promis
     context = temp.context
     const page = temp.page
     url = rewriteUrl(url)
-    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
+    const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 })
     await page.waitForTimeout(2000) // Let JS render
     const text = await page.innerText('body').catch(() => '')
-    const finalUrl = page.url()
-    const title = await page.title().catch(() => '')
-    return {
-      ok: text.length > 0,
-      content: text.slice(0, 50000),
-      bytes: text.length,
-      finalUrl,
-      title,
-    }
+    const html = await page.content().catch(() => '')
+    return browserOutcome(url, {
+      status: response?.status() ?? null,
+      text,
+      html,
+      title: await page.title().catch(() => ''),
+      finalUrl: page.url(),
+      frameUrls: page.frames().map((f) => f.url()),
+    })
   } catch (err) {
     return {
       ok: false,

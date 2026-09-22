@@ -65,7 +65,7 @@ export function createRouter(deps: RouterDeps) {
         // The fetch_page handler only touches ctx.fetch/getRunId — a minimal ToolContext suffices.
         const ctx = { credentials: {}, fetch: globalThis.fetch }
         const result = await deps.fetchPage({ url }, ctx)
-        if (result.error) {
+        if (result.error !== undefined) {
           json(res, 502, { error: result.error, final_url: result.url })
           return
         }

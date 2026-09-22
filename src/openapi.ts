@@ -40,6 +40,12 @@ const browseResultSchema = {
       description:
         'Playwright ariaSnapshot — a YAML-like accessibility tree; interactive nodes carry the role+name used by click/type/select.',
     },
+    blocked: {
+      type: 'object',
+      description: 'Present when the page is a bot-protection wall.',
+      required: ['reason', 'hint'],
+      properties: { reason: { type: 'string' }, hint: { type: 'string' } },
+    },
   },
 }
 

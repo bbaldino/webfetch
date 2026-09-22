@@ -1,11 +1,13 @@
 import type { Page } from 'playwright-core'
 import { takeSnapshot } from './snapshot.js'
 import { rewriteUrl } from './url-rewrite.js'
+import { detectBlock, blockNotice, type BlockNotice } from './detect-block.js'
 
 export interface BrowseResult {
   url: string
   title: string
   snapshot: string
+  blocked?: BlockNotice
 }
 
 export type WaitFor = { role: string; name: string } | { text: string }
@@ -113,7 +115,17 @@ const DEFAULT_WAIT_TIMEOUT = 15000
 
 async function envelope(page: Page): Promise<BrowseResult> {
   const [title, snapshot] = await Promise.all([page.title().catch(() => ''), takeSnapshot(page)])
-  return { url: page.url(), title, snapshot }
+  const url = page.url()
+  let frameUrls: string[] = []
+  try {
+    frameUrls = page.frames().map((f) => f.url())
+  } catch {
+    /* page closing */
+  }
+  const reason = detectBlock({ title, text: snapshot, frameUrls })
+  return reason
+    ? { url, title, snapshot, blocked: blockNotice(url, reason) }
+    : { url, title, snapshot }
 }
 
 async function applyWait(

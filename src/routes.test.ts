@@ -47,6 +47,20 @@ describe('createRouter', () => {
     expect(await res.json()).toMatchObject({ title: 'T', text: 'C', method: 'stub' })
   })
 
+  it('POST /fetch treats an empty error string as a failure, not success (502)', async () => {
+    const base = await start({
+      fetchPage: async ({ url }) => ({ url, method: 'browser', error: '' }),
+      sessions: {} as never,
+      mcp: {} as never,
+    })
+    const res = await fetch(`${base}/fetch`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ url: 'https://x.test' }),
+    })
+    expect(res.status).toBe(502)
+  })
+
   it('unknown route returns 404 with a hint', async () => {
     const base = await start(stubDeps())
     const res = await fetch(`${base}/nope`)
