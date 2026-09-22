@@ -4,3 +4,8 @@ dist
 *.log
 *.sqlite
 *.sqlite-journal
+
+# exported browser cookies (live sessions) and local agent notes: never commit/format/ship
+cookies.json
+*.cookies.json
+.superpowers/

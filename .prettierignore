@@ -5,3 +5,8 @@ coverage
 *.min.js
 package-lock.json
 CHANGELOG.md
+
+# exported browser cookies (live sessions) and local agent notes: never commit/format/ship
+cookies.json
+*.cookies.json
+.superpowers/
