@@ -22,10 +22,16 @@ For each URL, `fetch_page` runs a tiered strategy and learns per-domain which on
    [Redlib](https://github.com/redlib-org/redlib) instance, it's tried **first**, for post
    URLs and subreddit listings: full nested comment threads (with scores), not just the ~20
    flat comments RSS gives, plus subreddit listings the rest of the chain can't fetch at all.
-   Every link in its output is rewritten back to `reddit.com`, so the internal Redlib host
-   never leaks. Leave the var unset and behavior is exactly the chain above; any Redlib
-   failure (non-200, timeout, connection refused, or a page without the expected post/listing
-   markup) falls through to it too. The official `quay.io/redlib/redlib` image is stale and
+   Links back to Reddit itself are rewritten to `reddit.com`; links to Reddit's media hosts
+   (images, previews, video) are rewritten to the real media host they came from (`i.redd.it`,
+   `preview.redd.it`, `v.redd.it`, ...) rather than `reddit.com`, so they keep working. The
+   internal Redlib host itself never leaks. Output from every Reddit tier is capped at 50,000
+   characters, cut on a line boundary with a `[truncated — …]` note pointing at the full
+   thread on reddit.com when a busy thread runs over. Leave `WEBFETCH_REDLIB_URL` unset and
+   behavior is exactly the chain above; any Redlib failure (non-200, timeout, connection
+   refused, or a page without the expected post/listing markup) falls through to it too —
+   note that a hung Redlib instance adds up to 15 seconds in front of the existing chain
+   before falling back. The official `quay.io/redlib/redlib` image is stale and
    fails OAuth, so run one built from a pinned upstream commit (its `Dockerfile.ubuntu`)
    instead of `latest`. The homelab deploy uses `ghcr.io/bbaldino/redlib:<upstream-sha>`, built
    by the [`bbaldino/redlib`](https://github.com/bbaldino/redlib) workflow — when Reddit
