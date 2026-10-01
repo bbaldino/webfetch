@@ -137,6 +137,98 @@ ${comment('c2', 'bob', '2', '<p>Second thread</p>')}
   })
 })
 
+describe('hidden scores', () => {
+  // Reddit hides vote counts on some posts/comments; Redlib then renders the
+  // title attribute as "Hidden" (or "•") instead of a number. Only a real
+  // integer (optionally negative) should ever become "N points".
+  const HIDDEN_POST = `<html><body><main>
+<div class="post highlighted">
+  <p class="post_header">
+    <a class="post_subreddit" href="/r/testsub">r/testsub</a>
+    <a class="post_author " href="/user/op">u/op</a>
+  </p>
+  <h1 class="post_title">Hidden score post</h1>
+  <div class="post_body"><div class="md"><p>Body</p></div></div>
+  <div class="post_score" title="Hidden">&bull;<span class="label"> Upvotes</span></div>
+</div>
+<div class="thread">
+${comment('c1', 'alice', '•', '<p>Comment with hidden score</p>')}
+</div>
+</main></body></html>`
+
+  it('omits the score from the post header and a comment when it is non-numeric', () => {
+    const r = parseRedlibPost(HIDDEN_POST)!
+    expect(r.content).toMatch(/^# Hidden score post\nr\/testsub · u\/op\n/)
+    expect(r.content).not.toContain('Hidden points')
+    expect(r.content).not.toContain('• points')
+    expect(r.content).toContain('[u/alice]')
+    expect(r.content).not.toContain('[u/alice ·')
+  })
+
+  it('omits the score from a listing entry when it is non-numeric', () => {
+    const HIDDEN_LISTING = `<html><body><main>
+<div class="post" id="1a">
+  <p class="post_header"><a class="post_author " href="/u/bob">u/bob</a></p>
+  <h2 class="post_title"><a href="/r/testsub/comments/1a/x/">A post</a></h2>
+  <div class="post_score" title="Hidden">&bull;<span class="label"> Upvotes</span></div>
+  <div class="post_footer"><a href="/r/testsub/comments/1a/x/" class="post_comments" title="4 comments">4 comments</a></div>
+</div>
+</main></body></html>`
+    const r = parseRedlibListing(HIDDEN_LISTING, 'testsub')!
+    expect(r.content).toContain('- A post — u/bob · 4 comments')
+    expect(r.content).not.toContain('Hidden points')
+  })
+})
+
+describe('escaped link text', () => {
+  it('keeps link text containing "<3" (and a literal tag-shaped string) intact', () => {
+    const html = `<html><body><main>
+<div class="post highlighted">
+  <p class="post_header">
+    <a class="post_subreddit" href="/r/testsub">r/testsub</a>
+    <a class="post_author " href="/user/op">u/op</a>
+  </p>
+  <h1 class="post_title">Link text post</h1>
+  <div class="post_body"><div class="md"><p>I <a href="https://example.com/heart">&lt;3</a> this and <a href="https://example.com/b">a &lt;b&gt; c</a> too.</p></div></div>
+  <div class="post_score" title="1">1</div>
+</div>
+<div class="thread"></div>
+</main></body></html>`
+    const r = parseRedlibPost(html)!
+    expect(r.content).toContain('<3 (https://example.com/heart)')
+    expect(r.content).toContain('a <b> c (https://example.com/b)')
+  })
+})
+
+describe('link posts', () => {
+  it('emits a Link: line under the header for a post pointing at an external URL', () => {
+    const html = `<html><body><main>
+<div class="post highlighted">
+  <p class="post_header">
+    <a class="post_subreddit" href="/r/technology">r/technology</a>
+    <a class="post_author " href="/user/op">u/op</a>
+  </p>
+  <h1 class="post_title">An article</h1>
+  <!-- POST MEDIA -->
+  <!-- post_type: link -->
+  <a id="post_url" href="https://example.com/article" rel="nofollow">https://example.com/article</a>
+  <div class="post_body"></div>
+  <div class="post_score" title="10">10</div>
+</div>
+<div class="thread"></div>
+</main></body></html>`
+    const r = parseRedlibPost(html)!
+    expect(r.content).toBe(
+      '# An article\nr/technology · u/op · 10 points\nLink: https://example.com/article',
+    )
+  })
+
+  it('does not emit a Link: line for a self post', () => {
+    const r = parseRedlibPost(POST)!
+    expect(r.content).not.toContain('Link:')
+  })
+})
+
 describe('parseRedlibListing', () => {
   it('lists posts with author, score, comment count and reddit.com links', () => {
     const r = parseRedlibListing(LISTING, 'testsub')!
