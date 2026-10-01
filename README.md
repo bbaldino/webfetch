@@ -27,8 +27,11 @@ For each URL, `fetch_page` runs a tiered strategy and learns per-domain which on
    failure (non-200, timeout, connection refused, or a page without the expected post/listing
    markup) falls through to it too. The official `quay.io/redlib/redlib` image is stale and
    fails OAuth, so run one built from a pinned upstream commit (its `Dockerfile.ubuntu`)
-   instead of `latest` — when Reddit changes something Redlib chokes on, the fix is bumping
-   that pin. Keep it LAN-internal (no published port); it needs no Reddit account of its own.
+   instead of `latest`. The homelab deploy uses `ghcr.io/bbaldino/redlib:<upstream-sha>`, built
+   by the [`bbaldino/redlib`](https://github.com/bbaldino/redlib) workflow — when Reddit
+   changes something Redlib chokes on, bump `UPSTREAM_SHA` there (or run the workflow with a
+   `sha` input), then move the stack's image tag. Keep it LAN-internal (no published port);
+   it needs no Reddit account of its own.
    See [`src/redlib.ts`](src/redlib.ts) for the parser.
 
 2. **Direct HTTP** — a plain `fetch` with a browser UA; the HTML is stripped to text. If the
