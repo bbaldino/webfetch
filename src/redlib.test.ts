@@ -58,6 +58,48 @@ describe('toRedditUrl', () => {
     expect(toRedditUrl('/user/alice')).toBe('https://www.reddit.com/u/alice')
     expect(toRedditUrl('https://example.com/a')).toBe('https://example.com/a')
   })
+
+  // Redlib proxies Reddit's media hosts through its own routes (see
+  // format_url in redlib-org/redlib src/utils.rs). Those routes must map back
+  // to the real media host, never to a dead reddit.com/img/... URL.
+  it('maps Redlib media/proxy routes back to their real Reddit media host', () => {
+    expect(toRedditUrl('/img/abc123.jpg')).toBe('https://i.redd.it/abc123.jpg')
+    expect(toRedditUrl('/preview/pre/xyz.png?width=100&auto=webp')).toBe(
+      'https://preview.redd.it/xyz.png?width=100&auto=webp',
+    )
+    expect(toRedditUrl('/preview/external-pre/xyz.jpg?auto=webp&s=bar')).toBe(
+      'https://external-preview.redd.it/xyz.jpg?auto=webp&s=bar',
+    )
+    expect(toRedditUrl('/vid/foo/360.mp4')).toBe('https://v.redd.it/foo/DASH_360.mp4')
+    expect(toRedditUrl('/hls/foo/HLSPlaylist.m3u8?a=bar')).toBe(
+      'https://v.redd.it/foo/HLSPlaylist.m3u8?a=bar',
+    )
+    expect(toRedditUrl('/emoji/a2x/b.png')).toBe('https://emoji.redditmedia.com/a2x/b.png')
+    expect(toRedditUrl('/thumb/a/XYZ.jpg')).toBe('https://a.thumbs.redditmedia.com/XYZ.jpg')
+    expect(toRedditUrl('/thumb/b/XYZ.jpg')).toBe('https://b.thumbs.redditmedia.com/XYZ.jpg')
+  })
+
+  it('returns null for a recognized proxy prefix that does not match a mappable shape', () => {
+    // Starts with a known Redlib proxy prefix but doesn't fit any mappable
+    // pattern (e.g. a /preview/ route that is neither /pre/ nor /external-pre/).
+    expect(toRedditUrl('/preview/thumbnail/xyz.png')).toBeNull()
+    expect(toRedditUrl('/vid/missing-quality-segment')).toBeNull()
+  })
+
+  it('still maps an ordinary Redlib-relative path that happens to share no proxy prefix', () => {
+    expect(toRedditUrl('/r/testsub/comments/1/x/')).toBe(
+      'https://www.reddit.com/r/testsub/comments/1/x/',
+    )
+  })
+
+  it('turns a protocol-relative href into an https:// URL', () => {
+    expect(toRedditUrl('//cdn.example.com/a.png')).toBe('https://cdn.example.com/a.png')
+  })
+
+  it('passes mailto: and other non-http schemes through unchanged', () => {
+    expect(toRedditUrl('mailto:x@y.z')).toBe('mailto:x@y.z')
+    expect(toRedditUrl('tel:+15551234567')).toBe('tel:+15551234567')
+  })
 })
 
 describe('parseRedlibPost', () => {
@@ -200,6 +242,96 @@ describe('escaped link text', () => {
   })
 })
 
+describe('media and proxy links in a comment/post body', () => {
+  const bodyPost = (md: string) => `<html><body><main>
+<div class="post highlighted">
+  <p class="post_header">
+    <a class="post_subreddit" href="/r/testsub">r/testsub</a>
+    <a class="post_author " href="/user/op">u/op</a>
+  </p>
+  <h1 class="post_title">Media links post</h1>
+  <div class="post_body"><div class="md">${md}</div></div>
+  <div class="post_score" title="1">1</div>
+</div>
+<div class="thread"></div>
+</main></body></html>`
+
+  it('maps Redlib media/proxy hrefs to their real reddit media host', () => {
+    const html = bodyPost(
+      '<p>' +
+        '<a href="/img/abc.jpg">pic</a> ' +
+        '<a href="/preview/pre/xyz.png?width=1">prev</a> ' +
+        '<a href="/preview/external-pre/ext.jpg">ext</a> ' +
+        '<a href="/vid/foo/360.mp4">vid</a>' +
+        '</p>',
+    )
+    const r = parseRedlibPost(html)!
+    expect(r.content).toContain('pic (https://i.redd.it/abc.jpg)')
+    expect(r.content).toContain('prev (https://preview.redd.it/xyz.png?width=1)')
+    expect(r.content).toContain('ext (https://external-preview.redd.it/ext.jpg)')
+    expect(r.content).toContain('vid (https://v.redd.it/foo/DASH_360.mp4)')
+    // Never a dead reddit.com/img/... or reddit.com/preview/... URL.
+    expect(r.content).not.toMatch(/reddit\.com\/(img|preview|vid)\//)
+  })
+
+  it('turns //host hrefs into https:// and passes mailto: through unchanged', () => {
+    const html = bodyPost(
+      '<p><a href="//cdn.example.com/a.png">cdn link</a> ' +
+        '<a href="mailto:x@y.z">email me</a></p>',
+    )
+    const r = parseRedlibPost(html)!
+    expect(r.content).toContain('cdn link (https://cdn.example.com/a.png)')
+    expect(r.content).toContain('email me (mailto:x@y.z)')
+  })
+
+  it('drops an unmappable proxy link, keeping only its link text', () => {
+    const html = bodyPost('<p>see <a href="/preview/thumbnail/xyz.png">this image</a> here</p>')
+    const r = parseRedlibPost(html)!
+    expect(r.content).toContain('see this image here')
+    expect(r.content).not.toContain('/preview/thumbnail')
+    expect(r.content).not.toContain('(https://www.reddit.com/preview')
+  })
+})
+
+describe('code blocks', () => {
+  it('renders <pre><code> verbatim, preserving indentation and newlines', () => {
+    const yaml =
+      'automation:\n' +
+      '  - alias: Turn on light\n' +
+      '    trigger:\n' +
+      '      - platform: state\n' +
+      '        entity_id: binary_sensor.motion\n' +
+      '        to: "on"\n' +
+      '    action:\n' +
+      '      - service: light.turn_on'
+    const escaped = yaml
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+    const html = `<html><body><main>
+<div class="post highlighted">
+  <p class="post_header">
+    <a class="post_subreddit" href="/r/homeassistant">r/homeassistant</a>
+    <a class="post_author " href="/user/op">u/op</a>
+  </p>
+  <h1 class="post_title">YAML post</h1>
+  <div class="post_body"><div class="md"><p>Here's my config:</p><pre><code>${escaped}
+</code></pre><p>Hope it helps, and don't forget <code>service: light.turn_on</code> inline too.</p></div></div>
+  <div class="post_score" title="1">1</div>
+</div>
+<div class="thread"></div>
+</main></body></html>`
+    const r = parseRedlibPost(html)!
+    expect(r.content).toContain(yaml)
+    expect(r.content).not.toContain('<code>')
+    expect(r.content).not.toContain('</code>')
+    expect(r.content).not.toContain('<pre>')
+    // Inline code keeps backticks.
+    expect(r.content).toContain('`service: light.turn_on`')
+  })
+})
+
 describe('link posts', () => {
   it('emits a Link: line under the header for a post pointing at an external URL', () => {
     const html = `<html><body><main>
@@ -247,5 +379,135 @@ describe('parseRedlibListing', () => {
 
   it('returns null when there are no posts', () => {
     expect(parseRedlibListing(ERROR_PAGE, 'testsub')).toBeNull()
+  })
+
+  it('requires at least one .post with a title link to /comments/, and skips entries without one', () => {
+    // Only `.post` on the page has no title link into /comments/ at all
+    // (e.g. a malformed or ad-like entry) — the page must not be treated as
+    // a valid listing just because a `.post` div exists.
+    const NO_TITLE_LINK = `<html><body><main>
+<div class="post" id="1a">
+  <p class="post_header"><a class="post_author " href="/u/bob">u/bob</a></p>
+  <h2 class="post_title">No link here</h2>
+  <div class="post_score" title="1">1</div>
+</div>
+</main></body></html>`
+    expect(parseRedlibListing(NO_TITLE_LINK, 'testsub')).toBeNull()
+
+    // A mix: one post with a real title link, one without — the valid
+    // listing is kept, but the link-less entry is skipped entirely.
+    const MIXED = `<html><body><main>
+<div class="post" id="1a">
+  <p class="post_header"><a class="post_author " href="/u/bob">u/bob</a></p>
+  <h2 class="post_title">No link here</h2>
+  <div class="post_score" title="1">1</div>
+</div>
+<div class="post" id="1b">
+  <p class="post_header"><a class="post_author " href="/u/eve">u/eve</a></p>
+  <h2 class="post_title"><a href="/r/testsub/comments/1b/second/">Second</a></h2>
+  <div class="post_score" title="5">5</div>
+  <div class="post_footer"><a href="/r/testsub/comments/1b/second/" class="post_comments" title="0 comments">0 comments</a></div>
+</div>
+</main></body></html>`
+    const r = parseRedlibListing(MIXED, 'testsub')!
+    expect(r.content).not.toContain('No link here')
+    expect(r.content).toContain('- Second — u/eve · 5 points · 0 comments')
+  })
+
+  it('appends a Next page line, keeping the query, when Redlib has a NEXT link', () => {
+    const WITH_NEXT = `<html><body><main>
+<div id="posts">
+<div class="post" id="1a">
+  <p class="post_header"><a class="post_author " href="/u/bob">u/bob</a></p>
+  <h2 class="post_title"><a href="/r/testsub/comments/1a/first/">First</a></h2>
+  <div class="post_score" title="1">1</div>
+</div>
+</div>
+<footer>
+  <a href="?sort=hot&amp;t=day&amp;after=t3_abc123" accesskey="N">NEXT</a>
+</footer>
+</main></body></html>`
+    const r = parseRedlibListing(WITH_NEXT, 'testsub')!
+    expect(r.content).toContain(
+      'Next page: https://www.reddit.com/r/testsub?sort=hot&t=day&after=t3_abc123',
+    )
+  })
+
+  it('emits no Next page line when there is no NEXT link', () => {
+    const r = parseRedlibListing(LISTING, 'testsub')!
+    expect(r.content).not.toContain('Next page:')
+  })
+})
+
+describe('comment author scoping (M1)', () => {
+  it('does not fall through to a nested reply author when the comment itself has none', () => {
+    // A comment whose own `.comment_data` header has no `.comment_author`
+    // element at all, with a nested reply that does — the parser must not
+    // mistakenly pick up the reply's author via an unscoped descendant query.
+    const html = `<html><body><main>
+<div class="post highlighted">
+  <p class="post_header">
+    <a class="post_subreddit" href="/r/testsub">r/testsub</a>
+    <a class="post_author " href="/user/op">u/op</a>
+  </p>
+  <h1 class="post_title">Post</h1>
+  <div class="post_body"><div class="md"><p>Body</p></div></div>
+  <div class="post_score" title="1">1</div>
+</div>
+<div class="thread">
+<div id="c1" class="comment">
+  <div class="comment_left"><p class="comment_score" title="1">1</p><div class="line"></div></div>
+  <details class="comment_right" open>
+    <summary class="comment_data"><span>(no author element here)</span></summary>
+    <div class="comment_body"><div class="md"><p>[removed]</p></div></div>
+    <blockquote class="replies">
+      <div id="c2" class="comment">
+        <div class="comment_left"><p class="comment_score" title="5">5</p><div class="line"></div></div>
+        <details class="comment_right" open>
+          <summary class="comment_data"><a class="comment_author" href="/user/child">u/child</a></summary>
+          <div class="comment_body"><div class="md"><p>A reply</p></div></div>
+        </details>
+      </div>
+    </blockquote>
+  </details>
+</div>
+</div>
+</main></body></html>`
+    const r = parseRedlibPost(html)!
+    expect(r.content).toContain('[[deleted] · 1 points]\n[removed]')
+    expect(r.content).not.toContain('[u/child]\n[removed]')
+    expect(r.content).toContain('  [u/child · 5 points]')
+  })
+})
+
+describe('truncated reply trees (M2)', () => {
+  it('emits an indented "(more replies: ...)" line where Redlib truncated a tree', () => {
+    const html = `<html><body><main>
+<div class="post highlighted">
+  <p class="post_header">
+    <a class="post_subreddit" href="/r/testsub">r/testsub</a>
+    <a class="post_author " href="/user/op">u/op</a>
+  </p>
+  <h1 class="post_title">Post</h1>
+  <div class="post_body"><div class="md"><p>Body</p></div></div>
+  <div class="post_score" title="1">1</div>
+</div>
+<div class="thread">
+<div id="c1" class="comment">
+  <div class="comment_left"><p class="comment_score" title="1">1</p><div class="line"></div></div>
+  <details class="comment_right" open>
+    <summary class="comment_data"><a class="comment_author" href="/user/alice">u/alice</a></summary>
+    <div class="comment_body"><div class="md"><p>Top level</p></div></div>
+    <blockquote class="replies">
+      <a class="deeper_replies" href="/r/testsub/comments/1/x/c1">&rarr; More replies (5)</a>
+    </blockquote>
+  </details>
+</div>
+</div>
+</main></body></html>`
+    const r = parseRedlibPost(html)!
+    expect(r.content).toContain(
+      '  (more replies: https://www.reddit.com/r/testsub/comments/1/x/c1)',
+    )
   })
 })
