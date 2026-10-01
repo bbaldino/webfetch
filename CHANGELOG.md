@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.7.0](https://github.com/bbaldino/webfetch/compare/v0.6.0...v0.7.0) (2026-10-01)
+
+
+### Features
+
+* parse Redlib post and listing pages into Reddit text ([b28bfcd](https://github.com/bbaldino/webfetch/commit/b28bfcdfd4d49061bdc23f989ab55046f5814bd6))
+* Redlib as the first Reddit tier when WEBFETCH_REDLIB_URL is set ([51f8a78](https://github.com/bbaldino/webfetch/commit/51f8a781661a34dbe2049374ab503709a0d76a0b))
+
+
+### Bug Fixes
+
+* cap Reddit output at 50,000 chars; add Redlib fall-through test coverage ([5e4f57c](https://github.com/bbaldino/webfetch/commit/5e4f57c81f3d6cf548cc8ae97a06048c0e7ef382))
+* Redlib parser — hidden scores, link posts, escaped link text ([c0abd26](https://github.com/bbaldino/webfetch/commit/c0abd265d6c079717b992b12a07f25a83050e54e))
+* Redlib parser — real media links, verbatim code blocks, truncated replies ([9ac9ac2](https://github.com/bbaldino/webfetch/commit/9ac9ac2a9158fd173636142987eebca1c9feeca8))
+
 ## [0.6.0](https://github.com/bbaldino/webfetch/compare/v0.5.0...v0.6.0) (2026-09-22)
 
 
