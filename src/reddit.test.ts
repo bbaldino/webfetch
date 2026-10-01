@@ -242,10 +242,112 @@ describe('fetchReddit with Redlib', () => {
     expect(String(spy.mock.calls[0][0])).toContain('redlib:8080')
   })
 
-  it('never contacts Redlib when WEBFETCH_REDLIB_URL is unset', async () => {
+  it('never contacts Redlib when WEBFETCH_REDLIB_URL is unset, matching the exact pre-Redlib call list', async () => {
+    const hadEnv = Object.prototype.hasOwnProperty.call(process.env, 'WEBFETCH_REDLIB_URL')
+    const original = process.env.WEBFETCH_REDLIB_URL
+    delete process.env.WEBFETCH_REDLIB_URL
+    try {
+      const spy = mockFetch(200, SAMPLE_RSS)
+      const r = await fetchReddit(CANON)
+      expect(r.method).toBe('reddit-rss')
+      // Exactly the pre-Redlib chain: the RSS URL, once, nothing else.
+      expect(spy.mock.calls.map(([u]) => String(u))).toEqual([
+        'https://www.reddit.com/r/t/comments/1/x.rss',
+      ])
+    } finally {
+      if (hadEnv) process.env.WEBFETCH_REDLIB_URL = original
+      else delete process.env.WEBFETCH_REDLIB_URL
+    }
+  })
+})
+
+describe('fetchReddit Redlib fall-through (M10)', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+  })
+  const CANON = 'https://www.reddit.com/r/t/comments/1/x/'
+
+  function mockRedlibThenRss(redlibBehavior: () => Promise<Response>) {
+    return vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.startsWith('http://redlib:8080')) return redlibBehavior()
+      return new Response(SAMPLE_RSS, { status: 200 })
+    })
+  }
+
+  it('falls through to the legacy chain on a Redlib timeout/AbortError', async () => {
+    vi.stubEnv('WEBFETCH_REDLIB_URL', 'http://redlib:8080')
+    mockRedlibThenRss(async () => {
+      throw new DOMException('The operation was aborted', 'AbortError')
+    })
+    const r = await fetchReddit(CANON)
+    expect(r.ok).toBe(true)
+    expect(r.method).toBe('reddit-rss')
+  })
+
+  it('falls through to the legacy chain on a Redlib connection refused', async () => {
+    vi.stubEnv('WEBFETCH_REDLIB_URL', 'http://redlib:8080')
+    mockRedlibThenRss(async () => {
+      throw Object.assign(new TypeError('fetch failed'), {
+        cause: { code: 'ECONNREFUSED' },
+      })
+    })
+    const r = await fetchReddit(CANON)
+    expect(r.ok).toBe(true)
+    expect(r.method).toBe('reddit-rss')
+  })
+
+  it('falls through to the legacy chain on a Redlib 404', async () => {
+    vi.stubEnv('WEBFETCH_REDLIB_URL', 'http://redlib:8080')
+    mockRedlibThenRss(async () => new Response('not found', { status: 404 }))
+    const r = await fetchReddit(CANON)
+    expect(r.ok).toBe(true)
+    expect(r.method).toBe('reddit-rss')
+  })
+
+  it('falls through to the legacy chain on a Redlib 200 without the expected landmark', async () => {
+    vi.stubEnv('WEBFETCH_REDLIB_URL', 'http://redlib:8080')
+    mockRedlibThenRss(async () => new Response('<html><body>nope</body></html>', { status: 200 }))
+    const r = await fetchReddit(CANON)
+    expect(r.ok).toBe(true)
+    expect(r.method).toBe('reddit-rss')
+  })
+
+  it('falls through to the legacy chain for a subreddit listing too', async () => {
+    vi.stubEnv('WEBFETCH_REDLIB_URL', 'http://redlib:8080')
+    const LISTING_URL = 'https://www.reddit.com/r/testsub'
+    const oldRedditListingPage = `<html><head><title>testsub</title></head><body><p>${'Filler listing content. '.repeat(
+      20,
+    )}</p></body></html>`
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.startsWith('http://redlib:8080')) return new Response('bad gateway', { status: 502 })
+      if (url.includes('old.reddit.com')) return new Response(oldRedditListingPage, { status: 200 })
+      return new Response('', { status: 404 })
+    })
+    const r = await fetchReddit(LISTING_URL)
+    expect(r.ok).toBe(true)
+    expect(r.method).toBe('reddit-old')
+    expect(r.content).toContain('Filler listing content.')
+  })
+
+  it('reports the same error whether or not Redlib is enabled, when everything fails', async () => {
+    const alwaysFail = async () => new Response('server error', { status: 500 })
+
     vi.stubEnv('WEBFETCH_REDLIB_URL', '')
-    const spy = mockFetch(200, SAMPLE_RSS)
-    await fetchReddit(CANON)
-    expect(spy.mock.calls.every(([u]) => !String(u).includes('redlib'))).toBe(true)
+    vi.spyOn(globalThis, 'fetch').mockImplementation(alwaysFail)
+    const withoutRedlib = await fetchReddit(CANON)
+
+    vi.restoreAllMocks()
+    vi.stubEnv('WEBFETCH_REDLIB_URL', 'http://redlib:8080')
+    vi.spyOn(globalThis, 'fetch').mockImplementation(alwaysFail)
+    const withRedlib = await fetchReddit(CANON)
+
+    expect(withoutRedlib.ok).toBe(false)
+    expect(withRedlib.ok).toBe(false)
+    expect(withRedlib.error).toBe(withoutRedlib.error)
+    expect(withRedlib.method).toBe(withoutRedlib.method)
+    expect(withRedlib.method).toBe('reddit-feedfetcher')
   })
 })

@@ -61,6 +61,27 @@ export function isContentUsable(text: string): boolean {
   return true
 }
 
+/**
+ * Cap on Reddit tool output, applied uniformly across every Reddit tier
+ * (Redlib's full nested comment threads are the one most likely to exceed
+ * it — the other tiers already cap themselves well under this).
+ */
+export const REDDIT_OUTPUT_CAP = 50000
+
+/**
+ * Cap Reddit content at REDDIT_OUTPUT_CAP characters, cutting on a line
+ * boundary so no line is chopped mid-way, and pointing at the full thread
+ * on reddit.com when anything was dropped.
+ */
+export function capRedditContent(content: string, redditUrl: string): string {
+  if (content.length <= REDDIT_OUTPUT_CAP) return content
+  const lastNewline = content.lastIndexOf('\n', REDDIT_OUTPUT_CAP)
+  const cut = lastNewline > 0 ? lastNewline : REDDIT_OUTPUT_CAP
+  const kept = content.slice(0, cut)
+  const dropped = content.length - kept.length
+  return `${kept}\n[truncated — ${dropped} more characters; the full thread is at ${redditUrl}]`
+}
+
 /** Extract the page <title>, if any. */
 function extractHtmlTitle(html: string): string {
   const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
@@ -240,7 +261,9 @@ export function createTools(browserManager: BrowserManager, domainDb: DomainDb):
             url: r.finalUrl,
             method: r.method,
             title: r.title ?? '',
-            content: r.ok ? r.content : (r.error ?? 'Reddit fetch failed'),
+            content: r.ok
+              ? capRedditContent(r.content, r.canonicalUrl)
+              : (r.error ?? 'Reddit fetch failed'),
             ...(r.ok ? {} : { error: r.error ?? 'Reddit fetch failed' }),
           }
         }
