@@ -1,5 +1,8 @@
 /**
- * Reddit-aware fetching. Reddit blocks default fetch UAs but accepts:
+ * Reddit-aware fetching. When WEBFETCH_REDLIB_URL is set, a self-hosted Redlib
+ * instance is tried first (full nested comment threads and subreddit listings);
+ * any failure falls through to the existing chain. Reddit blocks default fetch
+ * UAs but accepts:
  *   1. <canonical>.json + Chrome UA → structured JSON with post + comments
  *   2. old.reddit.com/<path> + Chrome UA → SSR HTML fallback
  *   3. <canonical> + FeedFetcher-Google UA → full SSR shreddit HTML (fragile)
@@ -7,6 +10,7 @@
  * Share links (/s/<id>) must be redirect-resolved to canonical
  * (/r/<sub>/comments/<id>/<slug>/) before any of these tricks work.
  */
+import { parseRedlibListing, parseRedlibPost } from './redlib.js'
 
 const CHROME_UA =
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.7632.109 Safari/537.36'
@@ -519,13 +523,89 @@ export async function tryRssFeed(canonicalUrl: string): Promise<RedditResult> {
   }
 }
 
+const LISTING_RE = /^\/r\/([^/]+)(?:\/(?:hot|new|top|rising|controversial))?\/?$/
+const POST_RE = /^\/r\/([^/]+)\/comments\//
+
+/** What a reddit URL maps to on Redlib, or null if this tier doesn't handle it. */
+export function redlibTarget(
+  canonical: string,
+): { kind: 'post' | 'listing'; path: string; subreddit: string } | null {
+  let u: URL
+  try {
+    u = new URL(canonical)
+  } catch {
+    return null
+  }
+  const post = u.pathname.match(POST_RE)
+  if (post) return { kind: 'post', path: u.pathname, subreddit: post[1] }
+  const listing = u.pathname.match(LISTING_RE)
+  if (listing) return { kind: 'listing', path: u.pathname + u.search, subreddit: listing[1] }
+  return null
+}
+
+/** The www.reddit.com form of a URL (keeping the path + query Redlib was asked for). */
+function toRedditCanonical(url: string, target: { path: string } | null): string {
+  try {
+    const u = new URL(url)
+    return `https://www.reddit.com${target?.path ?? u.pathname + u.search}`
+  } catch {
+    return url
+  }
+}
+
 /**
- * Fetch a Reddit URL. Reddit walls the Chrome-UA .json/old.reddit endpoints, so
- * the primary path for a post is now its Atom feed fetched with the Google
- * FeedFetcher UA (structured post + comments, and less aggressively blocked).
- * The scrape methods remain as ordered fallbacks. Every method is guarded by
- * looksBlocked so a wall response falls through instead of being returned.
- * Resolves /s/<id> share links to canonical URLs first.
+ * Fetch via a self-hosted Redlib instance (WEBFETCH_REDLIB_URL): full nested comment
+ * threads and subreddit listings. Redlib passes Reddit's status through and 5xxs when
+ * Reddit blocks it, so anything but a 200 page with the expected landmark is a failure
+ * and the chain falls through. Output and URLs reference reddit.com, never Redlib.
+ */
+export async function tryRedlib(base: string, canonical: string): Promise<RedditResult> {
+  const target = redlibTarget(canonical)
+  const redditUrl = toRedditCanonical(canonical, target)
+  const fail = (error: string): RedditResult => ({
+    ok: false,
+    content: '',
+    bytes: 0,
+    canonicalUrl: redditUrl,
+    finalUrl: redditUrl,
+    method: 'reddit-redlib',
+    error,
+  })
+  if (!target) return fail('not a post or subreddit listing')
+  let status: number
+  let html: string
+  try {
+    const response = await fetch(base.replace(/\/+$/, '') + target.path, {
+      signal: AbortSignal.timeout(15000),
+    })
+    status = response.status
+    html = await response.text()
+  } catch (err) {
+    return fail(`Redlib request failed: ${(err as Error).message}`)
+  }
+  if (status !== 200) return fail(`Redlib HTTP ${status}`)
+  const parsed =
+    target.kind === 'post' ? parseRedlibPost(html) : parseRedlibListing(html, target.subreddit)
+  if (!parsed) return fail(`Redlib page had no ${target.kind}`)
+  return {
+    ok: true,
+    content: parsed.content,
+    bytes: parsed.content.length,
+    canonicalUrl: redditUrl,
+    finalUrl: redditUrl,
+    method: 'reddit-redlib',
+    title: parsed.title,
+  }
+}
+
+/**
+ * Fetch a Reddit URL. When WEBFETCH_REDLIB_URL is set, a self-hosted Redlib instance
+ * is tried first: full nested comment threads and subreddit listings. Reddit walls
+ * the Chrome-UA .json/old.reddit endpoints, so the primary fallback path for a post is
+ * its Atom feed fetched with the Google FeedFetcher UA (structured post + comments,
+ * and less aggressively blocked). The scrape methods remain as ordered fallbacks after
+ * that. Every method is guarded by looksBlocked so a wall response falls through
+ * instead of being returned. Resolves /s/<id> share links to canonical URLs first.
  */
 export async function fetchReddit(url: string): Promise<RedditResult> {
   const resolved = await resolveCanonicalUrl(url)
@@ -533,6 +613,8 @@ export async function fetchReddit(url: string): Promise<RedditResult> {
   const isPost = toCanonicalPath(resolved) !== null
 
   const attempts: Array<() => Promise<RedditResult>> = []
+  const redlib = process.env.WEBFETCH_REDLIB_URL
+  if (redlib) attempts.push(() => tryRedlib(redlib, canonical)) // full threads + listings
   if (isPost) {
     attempts.push(() => tryRssFeed(canonical)) // reliable now: RSS + Google feed UA
     attempts.push(() => tryJsonEndpoint(canonical)) // structured, if Reddit ever un-walls it

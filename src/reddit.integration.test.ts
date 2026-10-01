@@ -33,3 +33,27 @@ describe.skipIf(process.env.REDDIT_INTEGRATION !== '1')('reddit corpus (live net
     }, 60000)
   }
 })
+
+describe.skipIf(process.env.REDDIT_INTEGRATION !== '1' || !process.env.WEBFETCH_REDLIB_URL)(
+  'reddit corpus via Redlib (live network)',
+  () => {
+    for (const entry of corpus) {
+      it(`fetches ${entry.url} via Redlib with nested comments`, async () => {
+        const r = await fetchReddit(entry.url)
+        expect(r.ok).toBe(true)
+        expect(r.method).toBe('reddit-redlib')
+        expect(r.content).toContain('## Comments')
+        if (entry.expectTitleContains) {
+          expect(r.title ?? '').toContain(entry.expectTitleContains)
+        }
+      }, 60000)
+    }
+
+    it('fetches a subreddit listing via Redlib', async () => {
+      const r = await fetchReddit('https://www.reddit.com/r/homeassistant')
+      expect(r.ok).toBe(true)
+      expect(r.method).toBe('reddit-redlib')
+      expect(r.content.startsWith('# r/homeassistant')).toBe(true)
+    }, 60000)
+  },
+)

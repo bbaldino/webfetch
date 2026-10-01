@@ -5,6 +5,9 @@ import {
   tryRssFeed,
   tryFeedFetcher,
   extractRedditPageText,
+  fetchReddit,
+  tryRedlib,
+  redlibTarget,
 } from './reddit.js'
 
 // A minimal but structurally-faithful Reddit per-post Atom feed: feed title is
@@ -63,8 +66,8 @@ describe('looksBlocked', () => {
 // looksBlocked's short-body heuristic can't be what catches it.
 const NOT_FOUND_RSS = `<?xml version="1.0" encoding="UTF-8"?><feed xmlns="http://www.w3.org/2005/Atom"><category term="homeassistant" label="r/homeassistant"/><title>homeassistant: page not found</title><link href="https://www.reddit.com/r/homeassistant/comments/deleted/"/><updated>2026-09-16T00:00:00+00:00</updated><id>https://www.reddit.com/r/homeassistant/.rss</id></feed>`
 
-function mockFetch(status: number, body: string): void {
-  vi.spyOn(globalThis, 'fetch').mockResolvedValue({
+function mockFetch(status: number, body: string) {
+  return vi.spyOn(globalThis, 'fetch').mockResolvedValue({
     ok: status >= 200 && status < 300,
     status,
     url: 'https://www.reddit.com/r/x/comments/1/x.rss',
@@ -160,5 +163,89 @@ describe('tryFeedFetcher content recovery', () => {
     )
     expect(r.ok).toBe(false)
     expect(r.content).toBe('')
+  })
+})
+
+const REDLIB_POST = `<div class="post highlighted"><p class="post_header"><a class="post_subreddit" href="/r/t">r/t</a><a class="post_author" href="/user/op">u/op</a></p><h1 class="post_title">Hello</h1><div class="post_body"><div class="md"><p>Body</p></div></div><div class="post_score" title="3">3</div></div><div class="thread"></div>`
+
+describe('redlibTarget', () => {
+  it('recognizes posts and subreddit listings, keeping the query', () => {
+    expect(redlibTarget('https://www.reddit.com/r/t/comments/1/x/')).toEqual({
+      kind: 'post',
+      path: '/r/t/comments/1/x/',
+      subreddit: 't',
+    })
+    expect(redlibTarget('https://old.reddit.com/r/t/top?t=week')).toEqual({
+      kind: 'listing',
+      path: '/r/t/top?t=week',
+      subreddit: 't',
+    })
+    expect(redlibTarget('https://www.reddit.com/r/t')?.kind).toBe('listing')
+    expect(redlibTarget('https://www.reddit.com/user/bob')).toBeNull()
+    expect(redlibTarget('https://www.reddit.com/r/t/wiki/index')).toBeNull()
+  })
+})
+
+describe('tryRedlib', () => {
+  afterEach(() => vi.restoreAllMocks())
+  const CANON = 'https://www.reddit.com/r/t/comments/1/x/'
+
+  it('fetches the same path from Redlib and reports reddit.com URLs only', async () => {
+    const spy = mockFetch(200, REDLIB_POST)
+    const r = await tryRedlib('http://redlib:8080', CANON)
+    expect(spy.mock.calls[0][0]).toBe('http://redlib:8080/r/t/comments/1/x/')
+    expect(r).toMatchObject({ ok: true, method: 'reddit-redlib', title: 'Hello' })
+    expect(r.finalUrl).toBe(CANON)
+    expect(r.canonicalUrl).toBe(CANON)
+    expect(JSON.stringify(r)).not.toContain('redlib:8080')
+  })
+
+  it('fails on non-200, on a 200 without the post landmark, and on network errors', async () => {
+    mockFetch(404, '<div id="error">nope</div>')
+    expect((await tryRedlib('http://redlib:8080', CANON)).ok).toBe(false)
+    vi.restoreAllMocks()
+    mockFetch(200, '<html><body>something else</body></html>')
+    expect((await tryRedlib('http://redlib:8080', CANON)).ok).toBe(false)
+    vi.restoreAllMocks()
+    vi.spyOn(globalThis, 'fetch').mockRejectedValue(new TypeError('fetch failed'))
+    const r = await tryRedlib('http://redlib:8080', CANON)
+    expect(r.ok).toBe(false)
+    expect(r.error).toContain('fetch failed')
+  })
+})
+
+describe('fetchReddit with Redlib', () => {
+  afterEach(() => {
+    vi.restoreAllMocks()
+    vi.unstubAllEnvs()
+  })
+  const CANON = 'https://www.reddit.com/r/t/comments/1/x/'
+
+  it('tries Redlib first when WEBFETCH_REDLIB_URL is set', async () => {
+    vi.stubEnv('WEBFETCH_REDLIB_URL', 'http://redlib:8080/')
+    const spy = mockFetch(200, REDLIB_POST)
+    const r = await fetchReddit(CANON)
+    expect(r.method).toBe('reddit-redlib')
+    expect(spy).toHaveBeenCalledTimes(1)
+    expect(spy.mock.calls[0][0]).toBe('http://redlib:8080/r/t/comments/1/x/')
+  })
+
+  it('falls through to the existing chain when Redlib fails', async () => {
+    vi.stubEnv('WEBFETCH_REDLIB_URL', 'http://redlib:8080')
+    const spy = vi.spyOn(globalThis, 'fetch').mockImplementation(async (input) => {
+      const url = String(input)
+      if (url.startsWith('http://redlib:8080')) return new Response('bad gateway', { status: 502 })
+      return new Response(SAMPLE_RSS, { status: 200 })
+    })
+    const r = await fetchReddit(CANON)
+    expect(r.method).toBe('reddit-rss')
+    expect(String(spy.mock.calls[0][0])).toContain('redlib:8080')
+  })
+
+  it('never contacts Redlib when WEBFETCH_REDLIB_URL is unset', async () => {
+    vi.stubEnv('WEBFETCH_REDLIB_URL', '')
+    const spy = mockFetch(200, SAMPLE_RSS)
+    await fetchReddit(CANON)
+    expect(spy.mock.calls.every(([u]) => !String(u).includes('redlib'))).toBe(true)
   })
 })

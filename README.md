@@ -17,6 +17,20 @@ For each URL, `fetch_page` runs a tiered strategy and learns per-domain which on
    and go through a dedicated chain (per-post Atom feed with the Google FeedFetcher UA →
    `.json` endpoint → `old.reddit.com` → SSR HTML), resolving `/s/` share links first. See
    [`src/reddit.ts`](src/reddit.ts).
+
+   When `WEBFETCH_REDLIB_URL` points at a self-hosted
+   [Redlib](https://github.com/redlib-org/redlib) instance, it's tried **first**, for post
+   URLs and subreddit listings: full nested comment threads (with scores), not just the ~20
+   flat comments RSS gives, plus subreddit listings the rest of the chain can't fetch at all.
+   Every link in its output is rewritten back to `reddit.com`, so the internal Redlib host
+   never leaks. Leave the var unset and behavior is exactly the chain above; any Redlib
+   failure (non-200, timeout, connection refused, or a page without the expected post/listing
+   markup) falls through to it too. The official `quay.io/redlib/redlib` image is stale and
+   fails OAuth, so run one built from a pinned upstream commit (its `Dockerfile.ubuntu`)
+   instead of `latest` — when Reddit changes something Redlib chokes on, the fix is bumping
+   that pin. Keep it LAN-internal (no published port); it needs no Reddit account of its own.
+   See [`src/redlib.ts`](src/redlib.ts) for the parser.
+
 2. **Direct HTTP** — a plain `fetch` with a browser UA; the HTML is stripped to text. If the
    result looks blocked or JS-gated (a heuristic), it falls through.
 3. **Browser fallback** — [Camoufox](https://github.com/daijro/camoufox), a Firefox fork that
@@ -229,13 +243,14 @@ need a tweak on a first real build.
 
 ## Configuration
 
-| Env var                      | Default              | Meaning                                                                                   |
-| ---------------------------- | -------------------- | ----------------------------------------------------------------------------------------- |
-| `PORT`                       | `9000`               | REST listen port.                                                                         |
-| `WEBFETCH_DB`                | `:memory:`           | SQLite path for the per-domain method-learning store.                                     |
-| `WEBFETCH_HEADLESS`          | `true`               | Set `false` to launch Camoufox headed (local debugging).                                  |
-| `WEBFETCH_MAX_SESSIONS`      | `3`                  | Max concurrent `/sessions`; `POST /sessions` past the cap is `429`.                       |
-| `WEBFETCH_SESSION_TTL_MS`    | `300000`             | Idle timeout (ms) for a session; each op resets the timer.                                |
-| `WEBFETCH_MCP_ALLOWED_HOSTS` | LAN hostnames        | Comma-separated `Host` values `/mcp` accepts (DNS-rebinding protection).                  |
-| `WEBFETCH_MCP_DNS_REBINDING` | `true`               | Set `false`/`0` to disable the `/mcp` Host check (e.g. behind a reverse proxy).           |
-| `WEBFETCH_COOKIE_JAR`        | `/data/cookies.json` | Path to the cookie jar (see [Sites behind bot protection](#sites-behind-bot-protection)). |
+| Env var                      | Default              | Meaning                                                                                                                 |
+| ---------------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                       | `9000`               | REST listen port.                                                                                                       |
+| `WEBFETCH_DB`                | `:memory:`           | SQLite path for the per-domain method-learning store.                                                                   |
+| `WEBFETCH_HEADLESS`          | `true`               | Set `false` to launch Camoufox headed (local debugging).                                                                |
+| `WEBFETCH_MAX_SESSIONS`      | `3`                  | Max concurrent `/sessions`; `POST /sessions` past the cap is `429`.                                                     |
+| `WEBFETCH_SESSION_TTL_MS`    | `300000`             | Idle timeout (ms) for a session; each op resets the timer.                                                              |
+| `WEBFETCH_MCP_ALLOWED_HOSTS` | LAN hostnames        | Comma-separated `Host` values `/mcp` accepts (DNS-rebinding protection).                                                |
+| `WEBFETCH_MCP_DNS_REBINDING` | `true`               | Set `false`/`0` to disable the `/mcp` Host check (e.g. behind a reverse proxy).                                         |
+| `WEBFETCH_COOKIE_JAR`        | `/data/cookies.json` | Path to the cookie jar (see [Sites behind bot protection](#sites-behind-bot-protection)).                               |
+| `WEBFETCH_REDLIB_URL`        | unset                | Self-hosted Redlib base URL (e.g. `http://redlib:8080`); first Reddit tier when set. See [Reddit chain](#what-it-does). |
