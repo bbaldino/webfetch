@@ -27,6 +27,7 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "better-sqlite3": "^13.0.3",
     "camoufox-js": "^0.12.0",
+    "node-html-parser": "^9.0.4",
     "playwright-core": "1.60.0",
     "zod": "^4.6.5"
   },
